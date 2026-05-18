@@ -1,0 +1,14 @@
+node_modules/
+dist/
+src-tauri/target/
+target/
+*.log
+.env
+.env.local
+.env.*.local
+*.db
+*.sqlite
+*.sqlite3
+*.pdb
+.DS_Store
+Thumbs.db
