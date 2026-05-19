@@ -454,7 +454,7 @@ export default function SettingsPage() {
               {tab === "settings" && "设置与备份"}
             </h2>
             <p className="mt-0.5 text-xs text-qs-textMuted">
-              Ctrl+Alt+Q 呼出弹窗；单击粘贴，右键复制；缩写后按 Alt 展开。
+              Ctrl+Alt+Q 呼出弹窗；单击粘贴，右键复制；缩写后按空格展开。
             </p>
           </div>
           <div className="flex gap-2">
@@ -569,7 +569,7 @@ export default function SettingsPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <kbd className="kbd accent">{item.abbreviation}</kbd>
-                      <span className="text-xs text-qs-textMuted">按 Alt 展开</span>
+                      <span className="text-xs text-qs-textMuted">按空格展开</span>
                       <span className={`badge ${item.enabled ? "" : "muted"}`}>
                         {item.enabled ? "启用" : "停用"}
                       </span>
@@ -684,7 +684,7 @@ export default function SettingsPage() {
                   <InfoLine label="呼出窗口" value="Ctrl + Alt + Q" />
                   <InfoLine label="粘贴选中短语" value="Enter 或单击" />
                   <InfoLine label="复制短语" value="右键短语" />
-                  <InfoLine label="文本扩展" value="输入缩写后按 Alt" />
+                  <InfoLine label="文本扩展" value="输入缩写后按空格" />
                   <InfoLine label="独立短语热键" value="在短语里填写，如 Ctrl+Shift+1" />
                 </div>
               </Panel>

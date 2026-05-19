@@ -1,142 +1,254 @@
 # QuickSend
 
-QuickSend 是一个跨平台快捷短语粘贴工具。它可以用全局快捷键呼出短语面板，快速搜索、复制或粘贴常用文本和图片，也支持文本扩展、进程规则、开机自启动和 JSON 数据备份。
+QuickSend 是一个“常用内容一键粘贴”工具。
 
-项目使用 Tauri 2、React 18、TypeScript、Rust 和 SQLite 构建。数据保存在本机，不依赖云端服务。
+你可以把邮箱、地址、客服回复、代码片段、表情包、截图模板等内容提前存进去。以后需要的时候，不用到处复制，按一下快捷键、点一下短语，就能粘贴到当前正在输入的位置。
 
-## 功能特性
+适合这些场景：
 
-- 全局呼出：按 `Ctrl+Alt+Q` 在鼠标附近打开快捷短语面板。
-- 快速粘贴：单击或按 `Enter` 粘贴选中的短语，右键只复制到剪贴板。
-- 分组管理：按场景管理常用短语，并设置全局默认分组。
-- 搜索匹配：支持按标题、内容、缩写以及中文拼音进行搜索。
-- 文本和图片短语：可保存多行文本，也可保存图片并直接写入剪贴板。
-- 独立热键：每条短语可设置自己的组合键，直接触发粘贴。
-- 文本扩展：输入缩写后按 `Alt`，自动替换为完整文本。
-- 进程规则：根据当前前台应用自动切换默认短语分组。
-- 数据备份：支持导出和导入 JSON。
-- 系统托盘：后台常驻运行，可从托盘进入设置或退出应用。
+- 经常重复输入同一段话，比如客服回复、邮件签名、收货地址。
+- 想把多行文本保存起来，随时一键粘贴。
+- 想保存图片短语，比如二维码、表情包、常用截图。
+- 想输入一个短缩写，然后自动变成长文本。
+- 想在不同软件里显示不同分组，比如浏览器显示“常用回复”，VS Code 显示“代码片段”。
 
-## 环境要求
+## 主要功能
 
-- Node.js 18 或更高版本
-- Rust stable toolchain
-- Windows 10/11、macOS 或 Linux
-- Windows 需要 WebView2 Runtime。多数 Windows 10/11 系统已内置。
-- Linux 需要 WebKitGTK、AppIndicator、RSVG、xdotool、xclip 等依赖。
+| 功能 | 小白解释 |
+| --- | --- |
+| 快捷呼出 | 按 `Ctrl + Alt + Q`，在鼠标附近打开短语窗口。 |
+| 点一下粘贴 | 打开窗口后，单击短语就粘贴到当前光标位置。 |
+| 只复制不粘贴 | 右键短语，只复制到剪贴板，自己再手动粘贴。 |
+| 文本短语 | 支持普通文本，也支持多行文本。 |
+| 图片短语 | 可以保存图片，点击后复制/粘贴图片。 |
+| 独立热键 | 每条短语都可以单独设置快捷键，比如 `Ctrl + Shift + 1`。 |
+| 文本扩展 | 输入缩写后按空格，自动替换成完整内容。 |
+| 分组 | 把短语按用途分组，比如“工作”“邮箱”“客服”“代码”。 |
+| 进程规则 | 可以设置不同软件默认显示不同分组。 |
+| 搜索 | 支持中文、拼音、拼音首字母搜索。 |
+| 开机自启 | 可以设置开机后自动在后台运行。 |
+| 单实例 | 已经打开时，再点 exe 不会重复开多个。 |
 
-Ubuntu/Debian 可参考：
+## 最常用的操作
 
-```bash
-sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdotool xclip
+### 1. 打开快捷窗口
+
+按：
+
+```text
+Ctrl + Alt + Q
 ```
 
-## 安装与运行
+窗口会出现在鼠标附近。
 
-```bash
-npm install
-npm run tauri dev
+然后你可以：
+
+- 单击短语：直接粘贴。
+- 右键短语：只复制，不自动粘贴。
+- 输入关键词：搜索短语。
+- 按 `Esc`：关闭窗口。
+
+### 2. 添加一条文本短语
+
+例子：你经常要输入邮箱。
+
+1. 打开 QuickSend 设置。
+2. 进入“短语管理”。
+3. 点击“新建短语”。
+4. 标题填：`我的邮箱`
+5. 内容填：`yourname@example.com`
+6. 保存。
+
+以后按 `Ctrl + Alt + Q`，点“我的邮箱”，邮箱就会粘贴到光标位置。
+
+### 3. 添加一条多行短语
+
+例子：客服常用回复。
+
+```text
+您好，已经收到您的问题。
+我这边会尽快帮您查看。
+如果需要补充信息，我会第一时间联系您。
 ```
 
-仅构建前端：
+把这段文字保存成短语后，点击一次就能完整粘贴三行内容。
 
-```bash
-npm run build
+### 4. 添加图片短语
+
+有两种方式：
+
+第一种：先复制图片，再新建短语。
+
+1. 先在别的软件里复制一张图片。
+2. 回到 QuickSend。
+3. 点击“新建短语”。
+4. 如果剪贴板里有图片，软件会自动识别成图片短语。
+5. 保存即可。
+
+第二种：编辑短语时直接粘贴图片。
+
+1. 新建或编辑短语。
+2. 在编辑窗口里按 `Ctrl + V` 粘贴图片。
+3. 保存。
+
+以后点击这条图片短语，就可以把图片粘贴到支持图片粘贴的软件里。
+
+### 5. 使用文本扩展
+
+文本扩展就是“短词变长句”。
+
+比如你设置：
+
+| 缩写 | 展开后 |
+| --- | --- |
+| `;em` | `yourname@example.com` |
+| `；addr` | `北京市朝阳区示例路 100 号` |
+
+使用时：
+
+```text
+输入 ;em 然后按空格
 ```
 
-构建桌面应用：
+它会自动删除 `;em `，并输出：
 
-```bash
-npm run tauri build
+```text
+yourname@example.com
 ```
 
-Windows 也可以直接运行：
+说明：
 
-```bat
-build.bat
-```
+- `;em` 和 `；em` 都能识别，英文分号和中文分号会兼容。
+- 必须输入完整缩写再按空格。
+- 如果缩写写的是 `;em`，只输入 `em` 不会触发。
+- 输错后可以退格删除，再重新输入正确缩写，最后按空格也能触发。
 
-构建产物通常位于：
+### 6. 给某条短语设置独立热键
 
-- `src-tauri/target/release/quicksend.exe`
-- `src-tauri/target/release/bundle/`
+例子：你希望按 `Ctrl + Shift + 1` 直接粘贴邮箱。
 
-## 快速使用
+1. 打开“短语管理”。
+2. 编辑“我的邮箱”这条短语。
+3. 找到“独立热键”输入框。
+4. 直接按下 `Ctrl + Shift + 1`。
+5. 保存。
 
-1. 启动 QuickSend 后进入设置窗口。
-2. 在「短语管理」里创建分组和短语。
-3. 按 `Ctrl+Alt+Q` 呼出快捷面板。
-4. 输入关键词搜索短语。
-5. 按 `Enter` 或单击短语进行粘贴。
-6. 右键短语时只复制，不自动粘贴。
+以后不用打开窗口，直接按 `Ctrl + Shift + 1` 就能粘贴这条短语。
 
-常用快捷键：
+建议不要设置太常见的快捷键，比如 `Ctrl + C`、`Ctrl + V`、`Ctrl + S`，这些已经被系统或软件占用了。
+
+## 快捷键
 
 | 操作 | 快捷键 |
 | --- | --- |
-| 呼出或隐藏短语面板 | `Ctrl+Alt+Q` |
-| 上下选择短语 | `ArrowUp` / `ArrowDown` |
-| 粘贴选中短语 | `Enter` |
-| 切换分组 | `Tab` / `Shift+Tab` |
-| 关闭面板 | `Esc` |
-| 只复制短语 | 右键短语 |
-| 触发文本扩展 | 输入缩写后按 `Alt` |
+| 打开/隐藏短语窗口 | `Ctrl + Alt + Q` |
+| 粘贴选中的短语 | `Enter` |
+| 选择上一条/下一条 | `↑` / `↓` |
+| 切换分组 | `Tab` / `Shift + Tab` |
+| 关闭窗口 | `Esc` |
+| 文本扩展 | 输入缩写后按空格 |
 
-## 数据位置
+## 开机自启
 
-QuickSend 使用 SQLite 保存本地数据，默认路径如下：
+在“设置与备份”里可以打开“开机自启”。
 
-| 平台 | 数据库路径 |
+打开后，电脑开机时 QuickSend 会自动在后台运行。你不需要每次手动打开 exe。
+
+Windows 上会同时使用注册表和启动目录两种方式，提高自启成功率。
+
+## 数据保存在哪里
+
+QuickSend 的数据保存在你自己的电脑里，不需要登录账号，也不会上传到服务器。
+
+常见路径：
+
+| 系统 | 数据位置 |
 | --- | --- |
 | Windows | `%APPDATA%/quicksend/quicksend.db` |
 | macOS | `~/Library/Application Support/quicksend/quicksend.db` |
 | Linux | `~/.local/share/quicksend/quicksend.db` |
 
-建议通过设置页的 JSON 导出功能做备份，不要直接提交数据库文件。
+如果你要换电脑，建议在“设置与备份”里导出 JSON 备份，到新电脑后再导入。
 
-## 项目结构
+## 编译和运行
+
+需要先安装：
+
+- Node.js 18 或更高版本
+- Rust stable
+- Windows 10/11、macOS 或 Linux
+
+安装依赖：
+
+```bash
+npm install
+```
+
+开发模式运行：
+
+```bash
+npm run tauri dev
+```
+
+只构建前端：
+
+```bash
+npm run build
+```
+
+编译桌面程序：
+
+```bash
+npm run tauri build
+```
+
+Windows 也可以双击或运行：
+
+```bat
+build.bat
+```
+
+Windows exe 通常生成在：
 
 ```text
-QuickSend/
-├─ src/                         React 前端
-│  ├─ components/               设置页和快捷面板
-│  ├─ hooks/useTauri.ts         Tauri 命令封装
-│  ├─ types/                    前端类型定义
-│  └─ utils/pinyin.ts           拼音搜索工具
-├─ src-tauri/                   Rust 后端
-│  ├─ src/commands/             Tauri 命令入口
-│  ├─ src/db/                   SQLite 数据层
-│  ├─ src/input.rs              全局键盘监听和文本扩展
-│  ├─ src/platform/             平台相关能力
-│  └─ tauri.conf.json           Tauri 应用配置
-├─ docs/                        详细文档
-├─ package.json                 前端脚本与依赖
-└─ build.bat                    Windows 一键构建脚本
+src-tauri/target/release/quicksend.exe
 ```
+
+## Linux 依赖
+
+Ubuntu/Debian 可以参考：
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdotool xclip
+```
+
+## 常见问题
+
+### 按快捷键没有反应
+
+先确认 QuickSend 正在运行。Windows 可以看看右下角托盘有没有图标。
+
+如果还是没反应，可能是快捷键被别的软件占用了。可以尝试先关闭其他快捷键工具。
+
+### 输入缩写后没有展开
+
+请检查：
+
+- 文本扩展规则是否启用。
+- 托盘菜单里的文本扩展开关是否打开。
+- 缩写是否完整，比如设置的是 `;em`，就不能只输入 `em`。
+- 输入完整缩写后，需要按空格触发。
+
+### 图片粘贴失败
+
+不是所有软件都支持直接粘贴图片。可以先右键图片短语复制，再到目标软件里手动按 `Ctrl + V`。
+
+### 为什么只允许打开一个 QuickSend
+
+因为这是常驻工具。多开会导致多个监听器同时工作，容易重复粘贴或快捷键冲突。所以程序会自动保持单实例。
 
 ## 更多文档
 
-- [用户指南](docs/USER_GUIDE.md)
+- [小白使用指南](docs/USER_GUIDE.md)
 - [开发指南](docs/DEVELOPMENT.md)
 - [架构说明](docs/ARCHITECTURE.md)
-
-## 上传到 GitHub
-
-如果本地还没有 git 仓库，可按下面流程初始化并推送。将 `<your-repo-url>` 替换为 GitHub 上新建仓库的 HTTPS 或 SSH 地址。
-
-```bash
-git init
-git branch -M main
-git add .
-git commit -m "docs: add project documentation"
-git remote add origin <your-repo-url>
-git push -u origin main
-```
-
-如果仓库已经存在，只需要确认 remote 后执行：
-
-```bash
-git remote -v
-git push
-```
-
