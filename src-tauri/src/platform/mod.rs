@@ -218,12 +218,17 @@ fn windows_set_autostart(enabled: bool) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn macos_cursor_pos() -> Option<(i32, i32)> {
     unsafe {
-        use cocoa::appkit::NSApp;
         use cocoa::appkit::NSEvent;
         use cocoa::base::nil;
+        use objc::runtime::Object;
+        use objc::{class, msg_send, sel, sel_impl};
+
         let event = NSEvent::mouseLocation(nil);
-        // macOS uses flipped Y coordinates
-        let screen = NSApp(nil).mainScreen(nil);
+        let screen: *mut Object = msg_send![class!(NSScreen), mainScreen];
+        if screen == nil {
+            return Some((event.x as i32, event.y as i32));
+        }
+        // macOS uses flipped Y coordinates.
         let frame = cocoa::appkit::NSScreen::frame(screen);
         Some((event.x as i32, (frame.size.height - event.y) as i32))
     }

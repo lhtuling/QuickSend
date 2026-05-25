@@ -182,11 +182,11 @@ fn load_ui_labels(language_setting: Option<&str>, data_dir: &std::path::Path) ->
 
 fn chinese_ui_labels() -> UiLabels {
     UiLabels {
-        settings: "设置".to_string(),
-        toggle_expansion: "切换快捷输入".to_string(),
-        quit: "退出".to_string(),
-        tooltip: "QuickSend - 快捷短语粘贴".to_string(),
-        settings_title: "QuickSend 设置".to_string(),
+        settings: "??".to_string(),
+        toggle_expansion: "??????".to_string(),
+        quit: "??".to_string(),
+        tooltip: "QuickSend - ??????".to_string(),
+        settings_title: "QuickSend ??".to_string(),
     }
 }
 
@@ -263,15 +263,21 @@ fn toggle_popup(app: AppHandle) -> Result<(), String> {
 fn create_popup_window(app: &AppHandle) -> Result<(), String> {
     use tauri::WebviewUrl;
 
-    let win = tauri::WebviewWindowBuilder::new(
+    let mut builder = tauri::WebviewWindowBuilder::new(
         app,
         "popup",
         WebviewUrl::App("index.html#/popup".into()),
     )
     .title("QuickSend")
     .inner_size(420.0, 520.0)
-    .decorations(false)
-    .transparent(true)
+    .decorations(false);
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder.transparent(true);
+    }
+
+    let win = builder
     .always_on_top(true)
     .skip_taskbar(true)
     .resizable(false)
