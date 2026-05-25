@@ -180,6 +180,9 @@ impl InputTracker {
             let Ok(db) = state.db.lock() else {
                 return false;
             };
+            if is_current_process_blocked(&db) {
+                return false;
+            }
             find_text_trigger_target(&db, &self.typed, extra_backspaces)
         };
 
@@ -205,6 +208,9 @@ impl InputTracker {
             let Ok(db) = state.db.lock() else {
                 return false;
             };
+            if is_current_process_blocked(&db) {
+                return false;
+            }
             let Ok(phrases) = db.get_phrases() else {
                 return false;
             };
@@ -247,6 +253,23 @@ impl InputTracker {
     }
 }
 
+fn is_current_process_blocked(db: &Database) -> bool {
+    let Some(process_name) = crate::platform::get_active_process_name() else {
+        return false;
+    };
+    let blocked = db
+        .get_setting("disabled_processes")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    blocked
+        .lines()
+        .map(|line| line.trim().to_ascii_lowercase())
+        .filter(|line| !line.is_empty())
+        .any(|line| line == process_name.to_ascii_lowercase())
+}
+
 fn release_all_modifiers() {
     for key in [
         Key::ControlLeft,
@@ -270,10 +293,25 @@ fn find_text_trigger_target(
 ) -> Option<TextTriggerTarget> {
     let expansions = db.get_enabled_expansions().ok()?;
     let phrases = db.get_phrases().ok()?;
+    let require_prefix = db
+        .get_setting("text_expansion_require_prefix")
+        .ok()
+        .flatten()
+        .map(|value| value != "false")
+        .unwrap_or(true);
+    let prefixes = db
+        .get_setting("text_expansion_prefixes")
+        .ok()
+        .flatten()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| ";/#:\\".to_string());
     let mut candidates = Vec::new();
 
     for item in expansions {
         if !item.enabled {
+            continue;
+        }
+        if !trigger_allowed(&item.abbreviation, require_prefix, &prefixes) {
             continue;
         }
         if let Some(len) = matched_suffix_len(text, &item.abbreviation) {
@@ -294,6 +332,9 @@ fn find_text_trigger_target(
         if abbreviation.trim().is_empty() {
             continue;
         }
+        if !trigger_allowed(abbreviation, require_prefix, &prefixes) {
+            continue;
+        }
         if let Some(len) = matched_suffix_len(text, abbreviation) {
             candidates.push((
                 len,
@@ -309,6 +350,14 @@ fn find_text_trigger_target(
         .into_iter()
         .max_by_key(|(len, _)| *len)
         .map(|(_, target)| target)
+}
+
+fn trigger_allowed(abbreviation: &str, require_prefix: bool, prefixes: &str) -> bool {
+    if !require_prefix {
+        return true;
+    }
+
+    has_allowed_trigger_prefix(&normalize_trigger_text(abbreviation.trim()), prefixes)
 }
 
 fn execute_text_trigger_target(app: AppHandle, target: TextTriggerTarget) {
@@ -365,6 +414,14 @@ fn matched_suffix_len(typed: &str, abbreviation: &str) -> Option<usize> {
     })
 }
 
+fn has_allowed_trigger_prefix(value: &str, prefixes: &str) -> bool {
+    value
+        .chars()
+        .next()
+        .map(|ch| prefixes.chars().any(|prefix| prefix == ch))
+        .unwrap_or(false)
+}
+
 fn normalize_trigger_text(value: &str) -> String {
     value
         .chars()
@@ -392,7 +449,7 @@ fn normalize_trigger_text(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{matched_suffix_len, normalize_trigger_text};
+    use super::{matched_suffix_len, normalize_trigger_text, trigger_allowed};
 
     #[test]
     fn matches_full_width_and_half_width_trigger_prefixes() {
@@ -403,6 +460,12 @@ mod tests {
     #[test]
     fn does_not_match_without_required_prefix() {
         assert_eq!(matched_suffix_len("ypf", "；ypf"), None);
+    }
+
+    #[test]
+    fn does_not_match_plain_words_without_intent_prefix() {
+        assert!(!trigger_allowed("addr", true, ";/#:\\"));
+        assert!(trigger_allowed("addr", false, ";/#:\\"));
     }
 
     #[test]

@@ -23,7 +23,11 @@ pub struct Phrase {
     pub image_data: Option<String>,
     pub hotkey: Option<String>,
     pub abbreviation: Option<String>,
+    pub tags: Option<String>,
     pub sort_order: i32,
+    pub favorite: bool,
+    pub usage_count: i32,
+    pub last_used_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -58,7 +62,7 @@ pub struct Database {
 impl Database {
     pub fn new<P: AsRef<Path>>(path: P) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
-        let db = Database { conn };
+        let db = Self { conn };
         db.init_tables()?;
         Ok(db)
     }
@@ -68,7 +72,7 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS groups (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                icon TEXT NOT NULL DEFAULT '📁',
+                icon TEXT NOT NULL DEFAULT '*',
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
@@ -81,7 +85,11 @@ impl Database {
                 image_data TEXT,
                 hotkey TEXT,
                 abbreviation TEXT,
+                tags TEXT,
                 sort_order INTEGER NOT NULL DEFAULT 0,
+                favorite INTEGER NOT NULL DEFAULT 0,
+                usage_count INTEGER NOT NULL DEFAULT 0,
+                last_used_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
@@ -105,18 +113,54 @@ impl Database {
                 value TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_phrases_group ON phrases(group_id);
-            CREATE INDEX IF NOT EXISTS idx_phrases_title ON phrases(title);
-            CREATE INDEX IF NOT EXISTS idx_process_rules_name ON process_rules(process_name);
-            CREATE INDEX IF NOT EXISTS idx_text_expansions_abbr ON text_expansions(abbreviation);"
+            CREATE INDEX IF NOT EXISTS idx_phrases_title ON phrases(title);",
         )?;
 
-        // Seed default data if empty
-        let count: i64 = self.conn
-            .query_row("SELECT COUNT(*) FROM groups", [], |r| r.get(0))
-            .unwrap_or(0);
+        self.ensure_phrase_columns()?;
 
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_phrases_usage ON phrases(favorite, usage_count, last_used_at);
+            CREATE INDEX IF NOT EXISTS idx_process_rules_name ON process_rules(process_name);
+            CREATE INDEX IF NOT EXISTS idx_text_expansions_abbr ON text_expansions(abbreviation);",
+        )?;
+
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM groups", [], |row| row.get(0))
+            .unwrap_or(0);
         if count == 0 {
             self.seed_default_data()?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_phrase_columns(&self) -> SqlResult<()> {
+        let columns = {
+            let mut stmt = self.conn.prepare("PRAGMA table_info(phrases)")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            rows.collect::<SqlResult<Vec<_>>>()?
+        };
+
+        if !columns.iter().any(|column| column == "favorite") {
+            self.conn.execute(
+                "ALTER TABLE phrases ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !columns.iter().any(|column| column == "tags") {
+            self.conn
+                .execute("ALTER TABLE phrases ADD COLUMN tags TEXT", [])?;
+        }
+        if !columns.iter().any(|column| column == "usage_count") {
+            self.conn.execute(
+                "ALTER TABLE phrases ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !columns.iter().any(|column| column == "last_used_at") {
+            self.conn
+                .execute("ALTER TABLE phrases ADD COLUMN last_used_at TEXT", [])?;
         }
 
         Ok(())
@@ -125,48 +169,42 @@ impl Database {
     fn seed_default_data(&self) -> SqlResult<()> {
         let now = Utc::now().to_rfc3339();
         let general_id = Uuid::new_v4().to_string();
-        let email_id = Uuid::new_v4().to_string();
-        let code_id = Uuid::new_v4().to_string();
+        let support_id = Uuid::new_v4().to_string();
+        let prompt_id = Uuid::new_v4().to_string();
 
-        self.conn.execute(
-            "INSERT INTO groups (id, name, icon, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![general_id, "通用", "📋", 0, now],
-        )?;
-        self.conn.execute(
-            "INSERT INTO groups (id, name, icon, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![email_id, "邮箱模板", "📧", 1, now],
-        )?;
-        self.conn.execute(
-            "INSERT INTO groups (id, name, icon, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![code_id, "代码片段", "💻", 2, now],
-        )?;
-
-        // Default phrases
-        let phrases = vec![
-            (&general_id, "谢谢", "谢谢！\n感谢您的帮助。", "text", ""),
-            (&general_id, "确认收到", "收到，我确认一下。", "text", ""),
-            (&email_id, "正式问候", "尊敬的 {name}：\n\n您好！\n\n此致\n敬礼", "text", ""),
-            (&email_id, "跟进邮件", "您好 {name}，\n\n关于之前讨论的事项，想跟您跟进一下进度。\n\n谢谢！", "text", ""),
-            (&code_id, "Python HTTP", "import requests\n\nresponse = requests.get('https://api.example.com')\nprint(response.json())", "text", ""),
-            (&code_id, "Git 常用命令", "git add .\ngit commit -m \"feat: description\"\ngit push origin main", "text", ""),
-        ];
-
-        for (i, (gid, title, content, ctype, _hotkey)) in phrases.iter().enumerate() {
+        for (id, name, icon, order) in [
+            (&general_id, "General", "*", 0),
+            (&support_id, "Support", "S", 1),
+            (&prompt_id, "AI Prompts", "AI", 2),
+        ] {
             self.conn.execute(
-                "INSERT INTO phrases (id, group_id, title, content, content_type, image_data, hotkey, abbreviation, sort_order, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, ?6, ?7, ?7)",
-                params![Uuid::new_v4().to_string(), gid, title, content, ctype, i as i32, now],
+                "INSERT INTO groups (id, name, icon, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, name, icon, order, now],
             )?;
         }
 
-        // Default text expansions
-        let expansions = vec![
-            (";addr", "北京市朝阳区xxx路xxx号"),
-            (";phone", "138-0000-0000"),
-            (";sig", "张三\n高级工程师\nXX科技有限公司\n电话: 138-0000-0000"),
+        let phrases = vec![
+            (&general_id, "Thanks", "Thanks for your help.", "text"),
+            (&general_id, "Received", "Received. I will confirm and get back to you.", "text"),
+            (&support_id, "Order handled", "Hello {customer}, your order {order_id} has been handled.", "text"),
+            (&support_id, "Need details", "Hello, could you please provide {detail=the order number} so I can check it for you?", "text"),
+            (&prompt_id, "Rewrite professionally", "Please rewrite the following text to be more professional and concise:\n{text}", "text"),
+            (&prompt_id, "Summarize", "Please summarize the following content into bullet points:\n{content}", "text"),
         ];
 
-        for (abbr, text) in expansions {
+        for (index, (group_id, title, content, content_type)) in phrases.iter().enumerate() {
+            self.conn.execute(
+                "INSERT INTO phrases (id, group_id, title, content, content_type, image_data, hotkey, abbreviation, tags, sort_order, favorite, usage_count, last_used_at, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, NULL, ?6, 0, 0, NULL, ?7, ?7)",
+                params![Uuid::new_v4().to_string(), group_id, title, content, content_type, index as i32, now],
+            )?;
+        }
+
+        for (abbr, text) in [
+            (";addr", "Example address line"),
+            (";phone", "138-0000-0000"),
+            (";sig", "Your Name\nTitle\nCompany\nPhone: 138-0000-0000"),
+        ] {
             self.conn.execute(
                 "INSERT INTO text_expansions (id, abbreviation, expanded_text, enabled, created_at)
                  VALUES (?1, ?2, ?3, 1, ?4)",
@@ -177,35 +215,25 @@ impl Database {
         Ok(())
     }
 
-    // ==================== Groups ====================
     pub fn get_groups(&self) -> SqlResult<Vec<Group>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, icon, sort_order, created_at FROM groups ORDER BY sort_order"
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Group {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                icon: row.get(2)?,
-                sort_order: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, icon, sort_order, created_at FROM groups ORDER BY sort_order")?;
+        let rows = stmt.query_map([], map_group)?;
         rows.collect()
     }
 
     pub fn create_group(&self, name: &str, icon: &str) -> SqlResult<Group> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
-        let max_order: i32 = self.conn
-            .query_row("SELECT COALESCE(MAX(sort_order), -1) FROM groups", [], |r| r.get(0))
+        let max_order: i32 = self
+            .conn
+            .query_row("SELECT COALESCE(MAX(sort_order), -1) FROM groups", [], |row| row.get(0))
             .unwrap_or(-1);
-
         self.conn.execute(
             "INSERT INTO groups (id, name, icon, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, name, icon, max_order + 1, now],
         )?;
-
         Ok(Group {
             id,
             name: name.to_string(),
@@ -216,10 +244,8 @@ impl Database {
     }
 
     pub fn update_group(&self, id: &str, name: &str, icon: &str) -> SqlResult<()> {
-        self.conn.execute(
-            "UPDATE groups SET name = ?1, icon = ?2 WHERE id = ?3",
-            params![name, icon, id],
-        )?;
+        self.conn
+            .execute("UPDATE groups SET name = ?1, icon = ?2 WHERE id = ?3", params![name, icon, id])?;
         Ok(())
     }
 
@@ -230,84 +256,39 @@ impl Database {
     }
 
     pub fn reorder_groups(&self, ids: &[String]) -> SqlResult<()> {
-        for (i, id) in ids.iter().enumerate() {
-            self.conn.execute(
-                "UPDATE groups SET sort_order = ?1 WHERE id = ?2",
-                params![i as i32, id],
-            )?;
+        for (index, id) in ids.iter().enumerate() {
+            self.conn
+                .execute("UPDATE groups SET sort_order = ?1 WHERE id = ?2", params![index as i32, id])?;
         }
         Ok(())
     }
 
-    // ==================== Phrases ====================
     pub fn get_phrases(&self) -> SqlResult<Vec<Phrase>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, group_id, title, content, content_type, image_data, hotkey, abbreviation, sort_order, created_at, updated_at
-             FROM phrases ORDER BY sort_order"
+            "SELECT id, group_id, title, content, content_type, image_data, hotkey, abbreviation, tags, sort_order, favorite, usage_count, last_used_at, created_at, updated_at
+             FROM phrases ORDER BY favorite DESC, usage_count DESC, last_used_at DESC, sort_order",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Phrase {
-                id: row.get(0)?,
-                group_id: row.get(1)?,
-                title: row.get(2)?,
-                content: row.get(3)?,
-                content_type: row.get(4)?,
-                image_data: row.get(5)?,
-                hotkey: row.get(6)?,
-                abbreviation: row.get(7)?,
-                sort_order: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
-            })
-        })?;
+        let rows = stmt.query_map([], map_phrase)?;
         rows.collect()
     }
 
     pub fn get_phrases_by_group(&self, group_id: &str) -> SqlResult<Vec<Phrase>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, group_id, title, content, content_type, image_data, hotkey, abbreviation, sort_order, created_at, updated_at
-             FROM phrases WHERE group_id = ?1 ORDER BY sort_order"
+            "SELECT id, group_id, title, content, content_type, image_data, hotkey, abbreviation, tags, sort_order, favorite, usage_count, last_used_at, created_at, updated_at
+             FROM phrases WHERE group_id = ?1 ORDER BY favorite DESC, usage_count DESC, last_used_at DESC, sort_order",
         )?;
-        let rows = stmt.query_map(params![group_id], |row| {
-            Ok(Phrase {
-                id: row.get(0)?,
-                group_id: row.get(1)?,
-                title: row.get(2)?,
-                content: row.get(3)?,
-                content_type: row.get(4)?,
-                image_data: row.get(5)?,
-                hotkey: row.get(6)?,
-                abbreviation: row.get(7)?,
-                sort_order: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![group_id], map_phrase)?;
         rows.collect()
     }
 
     pub fn search_phrases(&self, query: &str) -> SqlResult<Vec<Phrase>> {
         let pattern = format!("%{}%", query);
         let mut stmt = self.conn.prepare(
-            "SELECT id, group_id, title, content, content_type, image_data, hotkey, abbreviation, sort_order, created_at, updated_at
-             FROM phrases WHERE title LIKE ?1 OR content LIKE ?1 OR abbreviation LIKE ?1
-             ORDER BY sort_order LIMIT 50"
+            "SELECT id, group_id, title, content, content_type, image_data, hotkey, abbreviation, tags, sort_order, favorite, usage_count, last_used_at, created_at, updated_at
+             FROM phrases WHERE title LIKE ?1 OR content LIKE ?1 OR abbreviation LIKE ?1 OR tags LIKE ?1
+             ORDER BY favorite DESC, usage_count DESC, last_used_at DESC, sort_order LIMIT 50",
         )?;
-        let rows = stmt.query_map(params![pattern], |row| {
-            Ok(Phrase {
-                id: row.get(0)?,
-                group_id: row.get(1)?,
-                title: row.get(2)?,
-                content: row.get(3)?,
-                content_type: row.get(4)?,
-                image_data: row.get(5)?,
-                hotkey: row.get(6)?,
-                abbreviation: row.get(7)?,
-                sort_order: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![pattern], map_phrase)?;
         rows.collect()
     }
 
@@ -320,33 +301,37 @@ impl Database {
         image_data: Option<&str>,
         hotkey: Option<&str>,
         abbreviation: Option<&str>,
+        tags: Option<&str>,
     ) -> SqlResult<Phrase> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
-        let max_order: i32 = self.conn
+        let max_order: i32 = self
+            .conn
             .query_row(
                 "SELECT COALESCE(MAX(sort_order), -1) FROM phrases WHERE group_id = ?1",
                 params![group_id],
-                |r| r.get(0),
+                |row| row.get(0),
             )
             .unwrap_or(-1);
-
         self.conn.execute(
-            "INSERT INTO phrases (id, group_id, title, content, content_type, image_data, hotkey, abbreviation, sort_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
-            params![id, group_id, title, content, content_type, image_data, hotkey, abbreviation, max_order + 1, now],
+            "INSERT INTO phrases (id, group_id, title, content, content_type, image_data, hotkey, abbreviation, tags, sort_order, favorite, usage_count, last_used_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, 0, NULL, ?11, ?11)",
+            params![id, group_id, title, content, content_type, image_data, hotkey, abbreviation, tags, max_order + 1, now],
         )?;
-
         Ok(Phrase {
             id,
             group_id: group_id.to_string(),
             title: title.to_string(),
             content: content.to_string(),
             content_type: content_type.to_string(),
-            image_data: image_data.map(|s| s.to_string()),
-            hotkey: hotkey.map(|s| s.to_string()),
-            abbreviation: abbreviation.map(|s| s.to_string()),
+            image_data: image_data.map(str::to_string),
+            hotkey: hotkey.map(str::to_string),
+            abbreviation: abbreviation.map(str::to_string),
+            tags: tags.map(str::to_string),
             sort_order: max_order + 1,
+            favorite: false,
+            usage_count: 0,
+            last_used_at: None,
             created_at: now.clone(),
             updated_at: now,
         })
@@ -361,13 +346,14 @@ impl Database {
         image_data: Option<&str>,
         hotkey: Option<&str>,
         abbreviation: Option<&str>,
+        tags: Option<&str>,
         group_id: &str,
     ) -> SqlResult<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE phrases SET title = ?1, content = ?2, content_type = ?3, image_data = ?4,
-             hotkey = ?5, abbreviation = ?6, group_id = ?7, updated_at = ?8 WHERE id = ?9",
-            params![title, content, content_type, image_data, hotkey, abbreviation, group_id, now, id],
+             hotkey = ?5, abbreviation = ?6, tags = ?7, group_id = ?8, updated_at = ?9 WHERE id = ?10",
+            params![title, content, content_type, image_data, hotkey, abbreviation, tags, group_id, now, id],
         )?;
         Ok(())
     }
@@ -377,59 +363,43 @@ impl Database {
         Ok(())
     }
 
+    pub fn record_phrase_usage(&self, id: &str) -> SqlResult<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE phrases SET usage_count = usage_count + 1, last_used_at = ?1 WHERE id = ?2",
+            params![now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_phrase_favorite(&self, id: &str, favorite: bool) -> SqlResult<()> {
+        self.conn
+            .execute("UPDATE phrases SET favorite = ?1 WHERE id = ?2", params![favorite as i32, id])?;
+        Ok(())
+    }
+
     pub fn get_phrase_by_id(&self, id: &str) -> SqlResult<Phrase> {
         self.conn.query_row(
-            "SELECT id, group_id, title, content, content_type, image_data, hotkey, abbreviation, sort_order, created_at, updated_at
+            "SELECT id, group_id, title, content, content_type, image_data, hotkey, abbreviation, tags, sort_order, favorite, usage_count, last_used_at, created_at, updated_at
              FROM phrases WHERE id = ?1",
             params![id],
-            |row| {
-                Ok(Phrase {
-                    id: row.get(0)?,
-                    group_id: row.get(1)?,
-                    title: row.get(2)?,
-                    content: row.get(3)?,
-                    content_type: row.get(4)?,
-                    image_data: row.get(5)?,
-                    hotkey: row.get(6)?,
-                    abbreviation: row.get(7)?,
-                    sort_order: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
-                })
-            },
+            map_phrase,
         )
     }
 
-    // ==================== Text Expansions ====================
     pub fn get_text_expansions(&self) -> SqlResult<Vec<TextExpansion>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, abbreviation, expanded_text, enabled, created_at FROM text_expansions ORDER BY abbreviation"
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(TextExpansion {
-                id: row.get(0)?,
-                abbreviation: row.get(1)?,
-                expanded_text: row.get(2)?,
-                enabled: row.get::<_, i32>(3)? != 0,
-                created_at: row.get(4)?,
-            })
-        })?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, abbreviation, expanded_text, enabled, created_at FROM text_expansions ORDER BY abbreviation")?;
+        let rows = stmt.query_map([], map_text_expansion)?;
         rows.collect()
     }
 
     pub fn get_enabled_expansions(&self) -> SqlResult<Vec<TextExpansion>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, abbreviation, expanded_text, enabled, created_at FROM text_expansions WHERE enabled = 1"
+            "SELECT id, abbreviation, expanded_text, enabled, created_at FROM text_expansions WHERE enabled = 1",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(TextExpansion {
-                id: row.get(0)?,
-                abbreviation: row.get(1)?,
-                expanded_text: row.get(2)?,
-                enabled: true,
-                created_at: row.get(4)?,
-            })
-        })?;
+        let rows = stmt.query_map([], map_text_expansion)?;
         rows.collect()
     }
 
@@ -462,19 +432,11 @@ impl Database {
         Ok(())
     }
 
-    // ==================== Process Rules ====================
     pub fn get_process_rules(&self) -> SqlResult<Vec<ProcessRule>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, process_name, group_id, created_at FROM process_rules ORDER BY process_name"
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ProcessRule {
-                id: row.get(0)?,
-                process_name: row.get(1)?,
-                group_id: row.get(2)?,
-                created_at: row.get(3)?,
-            })
-        })?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, process_name, group_id, created_at FROM process_rules ORDER BY process_name")?;
+        let rows = stmt.query_map([], map_process_rule)?;
         rows.collect()
     }
 
@@ -498,20 +460,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_group_for_process(&self, process_name: &str) -> SqlResult<Option<String>> {
-        let result = self.conn.query_row(
-            "SELECT group_id FROM process_rules WHERE process_name = ?1",
-            params![process_name],
-            |row| row.get::<_, String>(0),
-        );
-        match result {
-            Ok(gid) => Ok(Some(gid)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
-    // ==================== Settings ====================
     pub fn get_setting(&self, key: &str) -> SqlResult<Option<String>> {
         let result = self.conn.query_row(
             "SELECT value FROM settings WHERE key = ?1",
@@ -519,9 +467,9 @@ impl Database {
             |row| row.get::<_, String>(0),
         );
         match result {
-            Ok(v) => Ok(Some(v)),
+            Ok(value) => Ok(Some(value)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
+            Err(err) => Err(err),
         }
     }
 
@@ -544,90 +492,88 @@ impl Database {
         Ok(())
     }
 
-    // ==================== Import/Export ====================
     pub fn export_all(&self) -> SqlResult<serde_json::Value> {
-        let groups = self.get_groups()?;
-        let phrases = self.get_phrases()?;
-        let expansions = self.get_text_expansions()?;
-        let rules = self.get_process_rules()?;
-
         Ok(serde_json::json!({
             "version": 1,
-            "groups": groups,
-            "phrases": phrases,
-            "text_expansions": expansions,
-            "process_rules": rules,
+            "groups": self.get_groups()?,
+            "phrases": self.get_phrases()?,
+            "text_expansions": self.get_text_expansions()?,
+            "process_rules": self.get_process_rules()?,
+            "settings": self.get_settings()?,
         }))
     }
 
     pub fn import_data(&self, data: &serde_json::Value) -> SqlResult<()> {
-        // Clear existing data
         self.conn.execute("DELETE FROM process_rules", [])?;
         self.conn.execute("DELETE FROM text_expansions", [])?;
         self.conn.execute("DELETE FROM phrases", [])?;
         self.conn.execute("DELETE FROM groups", [])?;
 
         if let Some(groups) = data["groups"].as_array() {
-            for g in groups {
+            for group in groups {
                 self.conn.execute(
                     "INSERT INTO groups (id, name, icon, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![
-                        g["id"].as_str().unwrap_or_default(),
-                        g["name"].as_str().unwrap_or(""),
-                        g["icon"].as_str().unwrap_or("📁"),
-                        g["sort_order"].as_i64().unwrap_or(0) as i32,
-                        g["created_at"].as_str().unwrap_or(""),
+                        group["id"].as_str().unwrap_or_default(),
+                        group["name"].as_str().unwrap_or(""),
+                        group["icon"].as_str().unwrap_or("*"),
+                        group["sort_order"].as_i64().unwrap_or(0) as i32,
+                        group["created_at"].as_str().unwrap_or(""),
                     ],
                 )?;
             }
         }
 
         if let Some(phrases) = data["phrases"].as_array() {
-            for p in phrases {
+            for phrase in phrases {
                 self.conn.execute(
-                    "INSERT INTO phrases (id, group_id, title, content, content_type, image_data, hotkey, abbreviation, sort_order, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    "INSERT INTO phrases (id, group_id, title, content, content_type, image_data, hotkey, abbreviation, tags, sort_order, favorite, usage_count, last_used_at, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
-                        p["id"].as_str().unwrap_or_default(),
-                        p["group_id"].as_str().unwrap_or_default(),
-                        p["title"].as_str().unwrap_or(""),
-                        p["content"].as_str().unwrap_or(""),
-                        p["content_type"].as_str().unwrap_or("text"),
-                        p["image_data"].as_str(),
-                        p["hotkey"].as_str(),
-                        p["abbreviation"].as_str(),
-                        p["sort_order"].as_i64().unwrap_or(0) as i32,
-                        p["created_at"].as_str().unwrap_or(""),
-                        p["updated_at"].as_str().unwrap_or(""),
+                        phrase["id"].as_str().unwrap_or_default(),
+                        phrase["group_id"].as_str().unwrap_or_default(),
+                        phrase["title"].as_str().unwrap_or(""),
+                        phrase["content"].as_str().unwrap_or(""),
+                        phrase["content_type"].as_str().unwrap_or("text"),
+                        phrase["image_data"].as_str(),
+                        phrase["hotkey"].as_str(),
+                        phrase["abbreviation"].as_str(),
+                        phrase["tags"].as_str(),
+                        phrase["sort_order"].as_i64().unwrap_or(0) as i32,
+                        phrase["favorite"].as_bool().unwrap_or(false) as i32,
+                        phrase["usage_count"].as_i64().unwrap_or(0) as i32,
+                        phrase["last_used_at"].as_str(),
+                        phrase["created_at"].as_str().unwrap_or(""),
+                        phrase["updated_at"].as_str().unwrap_or(""),
                     ],
                 )?;
             }
         }
 
         if let Some(expansions) = data["text_expansions"].as_array() {
-            for e in expansions {
+            for item in expansions {
                 self.conn.execute(
                     "INSERT INTO text_expansions (id, abbreviation, expanded_text, enabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![
-                        e["id"].as_str().unwrap_or_default(),
-                        e["abbreviation"].as_str().unwrap_or(""),
-                        e["expanded_text"].as_str().unwrap_or(""),
-                        e["enabled"].as_bool().unwrap_or(true) as i32,
-                        e["created_at"].as_str().unwrap_or(""),
+                        item["id"].as_str().unwrap_or_default(),
+                        item["abbreviation"].as_str().unwrap_or(""),
+                        item["expanded_text"].as_str().unwrap_or(""),
+                        item["enabled"].as_bool().unwrap_or(true) as i32,
+                        item["created_at"].as_str().unwrap_or(""),
                     ],
                 )?;
             }
         }
 
         if let Some(rules) = data["process_rules"].as_array() {
-            for r in rules {
+            for rule in rules {
                 self.conn.execute(
                     "INSERT INTO process_rules (id, process_name, group_id, created_at) VALUES (?1, ?2, ?3, ?4)",
                     params![
-                        r["id"].as_str().unwrap_or_default(),
-                        r["process_name"].as_str().unwrap_or(""),
-                        r["group_id"].as_str().unwrap_or_default(),
-                        r["created_at"].as_str().unwrap_or(""),
+                        rule["id"].as_str().unwrap_or_default(),
+                        rule["process_name"].as_str().unwrap_or(""),
+                        rule["group_id"].as_str().unwrap_or_default(),
+                        rule["created_at"].as_str().unwrap_or(""),
                     ],
                 )?;
             }
@@ -635,4 +581,53 @@ impl Database {
 
         Ok(())
     }
+}
+
+fn map_group(row: &rusqlite::Row<'_>) -> SqlResult<Group> {
+    Ok(Group {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        icon: row.get(2)?,
+        sort_order: row.get(3)?,
+        created_at: row.get(4)?,
+    })
+}
+
+fn map_phrase(row: &rusqlite::Row<'_>) -> SqlResult<Phrase> {
+    Ok(Phrase {
+        id: row.get(0)?,
+        group_id: row.get(1)?,
+        title: row.get(2)?,
+        content: row.get(3)?,
+        content_type: row.get(4)?,
+        image_data: row.get(5)?,
+        hotkey: row.get(6)?,
+        abbreviation: row.get(7)?,
+        tags: row.get(8)?,
+        sort_order: row.get(9)?,
+        favorite: row.get::<_, i32>(10)? != 0,
+        usage_count: row.get(11)?,
+        last_used_at: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
+    })
+}
+
+fn map_text_expansion(row: &rusqlite::Row<'_>) -> SqlResult<TextExpansion> {
+    Ok(TextExpansion {
+        id: row.get(0)?,
+        abbreviation: row.get(1)?,
+        expanded_text: row.get(2)?,
+        enabled: row.get::<_, i32>(3)? != 0,
+        created_at: row.get(4)?,
+    })
+}
+
+fn map_process_rule(row: &rusqlite::Row<'_>) -> SqlResult<ProcessRule> {
+    Ok(ProcessRule {
+        id: row.get(0)?,
+        process_name: row.get(1)?,
+        group_id: row.get(2)?,
+        created_at: row.get(3)?,
+    })
 }

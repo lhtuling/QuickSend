@@ -1,11 +1,26 @@
 use crate::AppState;
 use crate::db::{Group, Phrase, TextExpansion, ProcessRule, Setting};
+use serde::Serialize;
 use tauri::AppHandle;
 use tauri::Manager;
 use std::sync::MutexGuard;
 
 fn lock_db<'a>(state: &'a tauri::State<'_, AppState>) -> Result<MutexGuard<'a, crate::db::Database>, String> {
     state.db.lock().map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize)]
+pub struct LanguagePack {
+    id: String,
+    name: Option<String>,
+    translations: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct I18nContext {
+    system_locale: String,
+    language_dir: String,
+    languages: Vec<LanguagePack>,
 }
 
 // ==================== Groups ====================
@@ -70,11 +85,12 @@ pub fn create_phrase(
     image_data: Option<String>,
     hotkey: Option<String>,
     abbreviation: Option<String>,
+    tags: Option<String>,
 ) -> Result<Phrase, String> {
     let db = lock_db(&state)?;
     db.create_phrase(
         &group_id, &title, &content, &content_type,
-        image_data.as_deref(), hotkey.as_deref(), abbreviation.as_deref(),
+        image_data.as_deref(), hotkey.as_deref(), abbreviation.as_deref(), tags.as_deref(),
     ).map_err(|e| e.to_string())
 }
 
@@ -89,11 +105,12 @@ pub fn update_phrase(
     image_data: Option<String>,
     hotkey: Option<String>,
     abbreviation: Option<String>,
+    tags: Option<String>,
 ) -> Result<(), String> {
     let db = lock_db(&state)?;
     db.update_phrase(
         &id, &title, &content, &content_type,
-        image_data.as_deref(), hotkey.as_deref(), abbreviation.as_deref(), &group_id,
+        image_data.as_deref(), hotkey.as_deref(), abbreviation.as_deref(), tags.as_deref(), &group_id,
     ).map_err(|e| e.to_string())
 }
 
@@ -137,7 +154,51 @@ pub fn paste_phrase_internal(app: &AppHandle, state: &AppState, id: &str) -> Res
         simulate_paste();
     });
 
+    record_phrase_usage_internal(state, id);
+
     Ok(())
+}
+
+#[tauri::command]
+pub fn paste_text_content(app: AppHandle, state: tauri::State<'_, AppState>, text: String, phrase_id: Option<String>) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("popup") {
+        let _ = win.hide();
+    }
+
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    app.clipboard().write_text(text).map_err(|e| e.to_string())?;
+
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        simulate_paste();
+    });
+
+    if let Some(id) = phrase_id.as_deref() {
+        let app_state: &AppState = &state;
+        record_phrase_usage_internal(app_state, id);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn record_phrase_usage(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let db = lock_db(&state)?;
+    db.record_phrase_usage(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_phrase_favorite(state: tauri::State<'_, AppState>, id: String, favorite: bool) -> Result<(), String> {
+    let db = lock_db(&state)?;
+    db.update_phrase_favorite(&id, favorite).map_err(|e| e.to_string())
+}
+
+pub fn record_phrase_usage_internal(state: &AppState, id: &str) {
+    if let Ok(db) = state.db.lock() {
+        if let Err(err) = db.record_phrase_usage(id) {
+            log::warn!("Failed to record phrase usage: {}", err);
+        }
+    }
 }
 
 #[tauri::command]
@@ -158,6 +219,11 @@ pub fn copy_phrase_to_clipboard(app: AppHandle, state: tauri::State<'_, AppState
     } else {
         use tauri_plugin_clipboard_manager::ClipboardExt;
         app.clipboard().write_text(phrase.content).map_err(|e| e.to_string())?;
+    }
+
+    {
+        let db = lock_db(&state)?;
+        db.record_phrase_usage(&id).map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -290,6 +356,21 @@ pub fn update_setting(state: tauri::State<'_, AppState>, key: String, value: Str
     db.update_setting(&key, &value).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn get_i18n_context() -> Result<I18nContext, String> {
+    let language_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("quicksend")
+        .join("languages");
+    std::fs::create_dir_all(&language_dir).map_err(|e| e.to_string())?;
+
+    Ok(I18nContext {
+        system_locale: system_locale(),
+        language_dir: language_dir.to_string_lossy().to_string(),
+        languages: read_language_packs(&language_dir),
+    })
+}
+
 // ==================== Import / Export ====================
 
 #[tauri::command]
@@ -302,4 +383,61 @@ pub fn export_data(state: tauri::State<'_, AppState>) -> Result<serde_json::Valu
 pub fn import_data(state: tauri::State<'_, AppState>, data: serde_json::Value) -> Result<(), String> {
     let db = lock_db(&state)?;
     db.import_data(&data).map_err(|e| e.to_string())
+}
+
+fn read_language_packs(language_dir: &std::path::Path) -> Vec<LanguagePack> {
+    let Ok(entries) = std::fs::read_dir(language_dir) else {
+        return Vec::new();
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+        .filter_map(|entry| {
+            let text = std::fs::read_to_string(entry.path()).ok()?;
+            let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+            let object = value.as_object()?;
+            let translations = object
+                .get("translations")
+                .and_then(|item| item.as_object())
+                .cloned()
+                .or_else(|| {
+                    let mut flat = object.clone();
+                    flat.remove("id");
+                    flat.remove("name");
+                    Some(flat)
+                })?;
+
+            let id = object
+                .get("id")
+                .and_then(|item| item.as_str())
+                .map(str::to_string)
+                .or_else(|| entry.path().file_stem().and_then(|item| item.to_str()).map(str::to_string))?;
+            let name = object.get("name").and_then(|item| item.as_str()).map(str::to_string);
+
+            Some(LanguagePack { id, name, translations })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn system_locale() -> String {
+    use windows::Win32::Globalization::GetUserDefaultLocaleName;
+
+    let mut buffer = [0u16; 85];
+    let len = unsafe { GetUserDefaultLocaleName(&mut buffer) };
+    if len > 0 {
+        String::from_utf16_lossy(&buffer[..len as usize - 1])
+    } else {
+        "zh-CN".to_string()
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn system_locale() -> String {
+    std::env::var("LANG")
+        .ok()
+        .and_then(|value| value.split('.').next().map(|item| item.replace('_', "-")))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "zh-CN".to_string())
 }

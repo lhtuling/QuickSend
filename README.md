@@ -1,254 +1,144 @@
 # QuickSend
 
-QuickSend 是一个“常用内容一键粘贴”工具。
+QuickSend is a local desktop productivity tool for quickly inserting frequently used text, images, templates, and AI prompts into any input box.
 
-你可以把邮箱、地址、客服回复、代码片段、表情包、截图模板等内容提前存进去。以后需要的时候，不用到处复制，按一下快捷键、点一下短语，就能粘贴到当前正在输入的位置。
+It is built with Tauri 2, React, TypeScript, Rust, and SQLite. Data stays on the user's machine and can be exported/imported as JSON.
 
-适合这些场景：
+## Features
 
-- 经常重复输入同一段话，比如客服回复、邮件签名、收货地址。
-- 想把多行文本保存起来，随时一键粘贴。
-- 想保存图片短语，比如二维码、表情包、常用截图。
-- 想输入一个短缩写，然后自动变成长文本。
-- 想在不同软件里显示不同分组，比如浏览器显示“常用回复”，VS Code 显示“代码片段”。
+- Global popup with `Ctrl + Alt + Q`
+- Phrase groups for organizing repeated content
+- Text and image phrases
+- One-click paste and right-click copy
+- Per-phrase hotkeys
+- Abbreviation expansion with configurable intent prefixes
+- App-specific default groups
+- App blacklist for disabling hotkeys and expansion in selected processes
+- Usage tracking, favorites, recent/frequent views, and duplicate detection
+- Tags with tag filters and popup search support
+- Variable templates, including defaults such as `{customer}` and `{detail=order number}`
+- Clipboard history with manual capture, optional auto-capture while settings is open, favorites, search, and "to phrase"
+- Sensitive clipboard filtering for likely passwords, codes, tokens, cards, and API keys
+- JSON backup and restore
+- System tray and optional autostart
 
-## 主要功能
+## Common Workflows
 
-| 功能 | 小白解释 |
-| --- | --- |
-| 快捷呼出 | 按 `Ctrl + Alt + Q`，在鼠标附近打开短语窗口。 |
-| 点一下粘贴 | 打开窗口后，单击短语就粘贴到当前光标位置。 |
-| 只复制不粘贴 | 右键短语，只复制到剪贴板，自己再手动粘贴。 |
-| 文本短语 | 支持普通文本，也支持多行文本。 |
-| 图片短语 | 可以保存图片，点击后复制/粘贴图片。 |
-| 独立热键 | 每条短语都可以单独设置快捷键，比如 `Ctrl + Shift + 1`。 |
-| 文本扩展 | 输入缩写后按空格，自动替换成完整内容。 |
-| 分组 | 把短语按用途分组，比如“工作”“邮箱”“客服”“代码”。 |
-| 进程规则 | 可以设置不同软件默认显示不同分组。 |
-| 搜索 | 支持中文、拼音、拼音首字母搜索。 |
-| 开机自启 | 可以设置开机后自动在后台运行。 |
-| 单实例 | 已经打开时，再点 exe 不会重复开多个。 |
+### Paste a phrase
 
-## 最常用的操作
+1. Place the cursor in any input box.
+2. Press `Ctrl + Alt + Q`.
+3. Search or select a phrase.
+4. Press `Enter` or click it.
 
-### 1. 打开快捷窗口
+### Create a template
 
-按：
-
-```text
-Ctrl + Alt + Q
-```
-
-窗口会出现在鼠标附近。
-
-然后你可以：
-
-- 单击短语：直接粘贴。
-- 右键短语：只复制，不自动粘贴。
-- 输入关键词：搜索短语。
-- 按 `Esc`：关闭窗口。
-
-### 2. 添加一条文本短语
-
-例子：你经常要输入邮箱。
-
-1. 打开 QuickSend 设置。
-2. 进入“短语管理”。
-3. 点击“新建短语”。
-4. 标题填：`我的邮箱`
-5. 内容填：`yourname@example.com`
-6. 保存。
-
-以后按 `Ctrl + Alt + Q`，点“我的邮箱”，邮箱就会粘贴到光标位置。
-
-### 3. 添加一条多行短语
-
-例子：客服常用回复。
+Create a text phrase like:
 
 ```text
-您好，已经收到您的问题。
-我这边会尽快帮您查看。
-如果需要补充信息，我会第一时间联系您。
+Hello {customer}, your order {order_id} has been handled.
 ```
 
-把这段文字保存成短语后，点击一次就能完整粘贴三行内容。
+When selected from the popup, QuickSend asks for the variable values before pasting.
 
-### 4. 添加图片短语
-
-有两种方式：
-
-第一种：先复制图片，再新建短语。
-
-1. 先在别的软件里复制一张图片。
-2. 回到 QuickSend。
-3. 点击“新建短语”。
-4. 如果剪贴板里有图片，软件会自动识别成图片短语。
-5. 保存即可。
-
-第二种：编辑短语时直接粘贴图片。
-
-1. 新建或编辑短语。
-2. 在编辑窗口里按 `Ctrl + V` 粘贴图片。
-3. 保存。
-
-以后点击这条图片短语，就可以把图片粘贴到支持图片粘贴的软件里。
-
-### 5. 使用文本扩展
-
-文本扩展就是“短词变长句”。
-
-比如你设置：
-
-| 缩写 | 展开后 |
-| --- | --- |
-| `;em` | `yourname@example.com` |
-| `；addr` | `北京市朝阳区示例路 100 号` |
-
-使用时：
+Defaults are supported:
 
 ```text
-输入 ;em 然后按空格
+Please provide {detail=the order number}.
 ```
 
-它会自动删除 `;em `，并输出：
+### Use abbreviation expansion
+
+Create an expansion or phrase abbreviation such as:
 
 ```text
-yourname@example.com
+;addr
 ```
 
-说明：
+Type `;addr` and press Space. QuickSend replaces it with the configured content.
 
-- `;em` 和 `；em` 都能识别，英文分号和中文分号会兼容。
-- 必须输入完整缩写再按空格。
-- 如果缩写写的是 `;em`，只输入 `em` 不会触发。
-- 输错后可以退格删除，再重新输入正确缩写，最后按空格也能触发。
+By default, expansion requires an intent prefix such as `;`, `/`, `#`, `:`, or `\` to avoid accidental triggers.
 
-### 6. 给某条短语设置独立热键
+### Use tags
 
-例子：你希望按 `Ctrl + Shift + 1` 直接粘贴邮箱。
+Add comma-separated tags to phrases:
 
-1. 打开“短语管理”。
-2. 编辑“我的邮箱”这条短语。
-3. 找到“独立热键”输入框。
-4. 直接按下 `Ctrl + Shift + 1`。
-5. 保存。
+```text
+support, prompt, account
+```
 
-以后不用打开窗口，直接按 `Ctrl + Shift + 1` 就能粘贴这条短语。
+Tags appear as filters in the settings page and are searchable in the popup.
 
-建议不要设置太常见的快捷键，比如 `Ctrl + C`、`Ctrl + V`、`Ctrl + S`，这些已经被系统或软件占用了。
+### Clipboard history
 
-## 快捷键
+Open `Clipboard` in settings:
 
-| 操作 | 快捷键 |
-| --- | --- |
-| 打开/隐藏短语窗口 | `Ctrl + Alt + Q` |
-| 粘贴选中的短语 | `Enter` |
-| 选择上一条/下一条 | `↑` / `↓` |
-| 切换分组 | `Tab` / `Shift + Tab` |
-| 关闭窗口 | `Esc` |
-| 文本扩展 | 输入缩写后按空格 |
+- Capture the current clipboard manually
+- Turn on auto-capture while the settings window is open
+- Search, favorite, delete, or convert entries into phrases
 
-## 开机自启
+Sensitive-looking text is skipped.
 
-在“设置与备份”里可以打开“开机自启”。
+## Development
 
-打开后，电脑开机时 QuickSend 会自动在后台运行。你不需要每次手动打开 exe。
-
-Windows 上会同时使用注册表和启动目录两种方式，提高自启成功率。
-
-## 数据保存在哪里
-
-QuickSend 的数据保存在你自己的电脑里，不需要登录账号，也不会上传到服务器。
-
-常见路径：
-
-| 系统 | 数据位置 |
-| --- | --- |
-| Windows | `%APPDATA%/quicksend/quicksend.db` |
-| macOS | `~/Library/Application Support/quicksend/quicksend.db` |
-| Linux | `~/.local/share/quicksend/quicksend.db` |
-
-如果你要换电脑，建议在“设置与备份”里导出 JSON 备份，到新电脑后再导入。
-
-## 编译和运行
-
-需要先安装：
-
-- Node.js 18 或更高版本
-- Rust stable
-- Windows 10/11、macOS 或 Linux
-
-安装依赖：
+Install dependencies:
 
 ```bash
 npm install
 ```
 
-开发模式运行：
+Run the frontend only:
+
+```bash
+npm run dev
+```
+
+Run the Tauri app:
 
 ```bash
 npm run tauri dev
 ```
 
-只构建前端：
+Build frontend:
 
 ```bash
 npm run build
 ```
 
-编译桌面程序：
+Run Rust tests:
+
+```bash
+cd src-tauri
+cargo test --lib
+```
+
+Build desktop app:
 
 ```bash
 npm run tauri build
 ```
 
-Windows 也可以双击或运行：
+## Data
 
-```bat
-build.bat
-```
+QuickSend stores data locally in SQLite. Common locations:
 
-Windows exe 通常生成在：
+- Windows: `%APPDATA%/quicksend/quicksend.db`
+- macOS: `~/Library/Application Support/quicksend/quicksend.db`
+- Linux: `~/.local/share/quicksend/quicksend.db`
 
-```text
-src-tauri/target/release/quicksend.exe
-```
+Use JSON export/import for backup and migration.
 
-## Linux 依赖
+## Verification
 
-Ubuntu/Debian 可以参考：
+Current verification commands:
 
 ```bash
-sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdotool xclip
+npm run build
+cd src-tauri && cargo test --lib
 ```
 
-## 常见问题
+## More Docs
 
-### 按快捷键没有反应
-
-先确认 QuickSend 正在运行。Windows 可以看看右下角托盘有没有图标。
-
-如果还是没反应，可能是快捷键被别的软件占用了。可以尝试先关闭其他快捷键工具。
-
-### 输入缩写后没有展开
-
-请检查：
-
-- 文本扩展规则是否启用。
-- 托盘菜单里的文本扩展开关是否打开。
-- 缩写是否完整，比如设置的是 `;em`，就不能只输入 `em`。
-- 输入完整缩写后，需要按空格触发。
-
-### 图片粘贴失败
-
-不是所有软件都支持直接粘贴图片。可以先右键图片短语复制，再到目标软件里手动按 `Ctrl + V`。
-
-### 为什么只允许打开一个 QuickSend
-
-因为这是常驻工具。多开会导致多个监听器同时工作，容易重复粘贴或快捷键冲突。所以程序会自动保持单实例。
-
-## 更多文档
-
-- [小白使用指南](docs/USER_GUIDE.md)
-- [开发指南](docs/DEVELOPMENT.md)
-- [架构说明](docs/ARCHITECTURE.md)
+- [User Guide](docs/USER_GUIDE.md)
+- [Development Guide](docs/DEVELOPMENT.md)
+- [Architecture](docs/ARCHITECTURE.md)

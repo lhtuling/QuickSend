@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { readImage, readText } from "@tauri-apps/plugin-clipboard-manager";
 import {
+  Clipboard,
   ClipboardList,
   Download,
   FileImage,
@@ -11,6 +12,7 @@ import {
   Save,
   Search,
   Settings as SettingsIcon,
+  Star,
   Trash2,
   Type,
   Upload,
@@ -26,40 +28,57 @@ import {
   deleteTextExpansion,
   exportData,
   getActiveProcessName,
+  getAutostartEnabled,
   getGroups,
   getPhrases,
   getPhrasesByGroup,
   getProcessRules,
   getSettings,
   getTextExpansions,
-  getAutostartEnabled,
   importData,
-  setProcessRule,
   setAutostartEnabled,
+  setProcessRule,
   updateGroup,
   updatePhrase,
+  updatePhraseFavorite,
   updateSetting,
   updateTextExpansion,
 } from "../hooks/useTauri";
+import { useI18n } from "../i18n";
+import {
+  addClipboardItem,
+  isSensitiveClipboardText,
+  readClipboardHistory,
+  saveClipboardHistory,
+  type ClipboardHistoryItem,
+} from "../utils/clipboardHistory";
 import { pinyinMatch } from "../utils/pinyin";
 import type { Group, Phrase, ProcessRule, Setting, TextExpansion } from "../types";
 
-type Tab = "phrases" | "expansions" | "process" | "settings";
+type Tab = "phrases" | "expansions" | "clipboard" | "process" | "settings";
+type PhraseView = "all" | "favorites" | "recent" | "frequent" | "duplicates";
 type PhraseDraft = Partial<Phrase> & { group_id: string; title: string; content_type: "text" | "image" };
 type ClipboardPhraseDraft = Pick<PhraseDraft, "content_type" | "content" | "image_data" | "title">;
 
-const GROUP_ICONS = ["📌", "📧", "💻", "🔗", "📝", "💬", "⭐", "🧰", "📁", "🏠", "🌐", "📱"];
+const GROUP_ICONS = ["*", "#", "@", "AI", "S", "T", "1", "2", "3", "A", "B", "C"];
+const DEFAULT_TRIGGER_PREFIXES = ";/#:\\";
 
 export default function SettingsPage() {
+  const { t, configuredLanguage, languages, languageDir, setLanguage } = useI18n();
   const [tab, setTab] = useState<Tab>("phrases");
   const [groups, setGroups] = useState<Group[]>([]);
   const [phrases, setPhrases] = useState<Phrase[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const [phraseView, setPhraseView] = useState<PhraseView>("all");
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [settings, setSettings] = useState<Setting[]>([]);
   const [autostartEnabled, setAutostartEnabledState] = useState(false);
   const [autostartStatus, setAutostartStatus] = useState("");
   const [expansions, setExpansions] = useState<TextExpansion[]>([]);
   const [processRules, setProcessRules] = useState<ProcessRule[]>([]);
+  const [clipboardHistory, setClipboardHistory] = useState<ClipboardHistoryItem[]>([]);
+  const [clipboardSearch, setClipboardSearch] = useState("");
+  const [clipboardStatus, setClipboardStatus] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [editingGroup, setEditingGroup] = useState<Partial<Group> | null>(null);
   const [editingPhrase, setEditingPhrase] = useState<PhraseDraft | null>(null);
@@ -68,6 +87,10 @@ export default function SettingsPage() {
   const [importText, setImportText] = useState("");
 
   const settingsMap = useMemo(() => new Map(settings.map((item) => [item.key, item.value])), [settings]);
+  const requireTriggerPrefix = settingsMap.get("text_expansion_require_prefix") !== "false";
+  const triggerPrefixes = settingsMap.get("text_expansion_prefixes") || DEFAULT_TRIGGER_PREFIXES;
+  const disabledProcesses = settingsMap.get("disabled_processes") || "";
+  const autoCaptureClipboard = settingsMap.get("auto_capture_clipboard") === "true";
 
   const loadGroups = useCallback(async () => {
     const loaded = await getGroups();
@@ -79,9 +102,7 @@ export default function SettingsPage() {
     setPhrases(selectedGroup ? await getPhrasesByGroup(selectedGroup) : await getPhrases());
   }, [selectedGroup]);
 
-  const loadSettings = useCallback(async () => {
-    setSettings(await getSettings());
-  }, []);
+  const loadSettings = useCallback(async () => setSettings(await getSettings()), []);
 
   const loadAutostart = useCallback(async () => {
     try {
@@ -92,18 +113,14 @@ export default function SettingsPage() {
     }
   }, []);
 
-  const loadExpansions = useCallback(async () => {
-    setExpansions(await getTextExpansions());
-  }, []);
-
-  const loadRules = useCallback(async () => {
-    setProcessRules(await getProcessRules());
-  }, []);
+  const loadExpansions = useCallback(async () => setExpansions(await getTextExpansions()), []);
+  const loadRules = useCallback(async () => setProcessRules(await getProcessRules()), []);
 
   useEffect(() => {
     loadGroups();
     loadSettings();
     loadAutostart();
+    setClipboardHistory(readClipboardHistory());
   }, [loadAutostart, loadGroups, loadSettings]);
 
   useEffect(() => {
@@ -115,23 +132,74 @@ export default function SettingsPage() {
     if (tab === "process") loadRules();
   }, [loadExpansions, loadRules, tab]);
 
+  useEffect(() => {
+    if (!autoCaptureClipboard) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const text = (await readText()).trim();
+        if (!text || isSensitiveClipboardText(text)) return;
+        setClipboardHistory((current) => {
+          const next = addClipboardItem(current, text);
+          if (next === current) return current;
+          saveClipboardHistory(next);
+          return next;
+        });
+      } catch {
+        // Clipboard can temporarily hold non-text data.
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [autoCaptureClipboard]);
+
   const filteredPhrases = useMemo(() => {
+    const duplicateIds = phraseView === "duplicates" ? findDuplicatePhraseIds(phrases) : new Set<string>();
+    const scoped = phrases.filter((phrase) => {
+      if (phraseView === "favorites" && !phrase.favorite) return false;
+      if (phraseView === "recent" && !phrase.last_used_at) return false;
+      if (phraseView === "frequent" && (phrase.usage_count || 0) === 0) return false;
+      if (phraseView === "duplicates" && !duplicateIds.has(phrase.id)) return false;
+      if (selectedTag && !phraseTags(phrase).includes(selectedTag)) return false;
+      return true;
+    });
+    const sorted = [...scoped].sort((a, b) => {
+      if (phraseView === "recent") return compareDateDesc(a.last_used_at, b.last_used_at);
+      if (phraseView === "frequent") return (b.usage_count || 0) - (a.usage_count || 0);
+      if (phraseView === "duplicates") return normalizePhraseContent(a).localeCompare(normalizePhraseContent(b));
+      return 0;
+    });
     const query = searchQuery.trim();
-    if (!query) return phrases;
-    return phrases.filter(
-      (phrase) =>
-        pinyinMatch(phrase.title, query) ||
-        pinyinMatch(phrase.content, query) ||
-        (phrase.abbreviation ? pinyinMatch(phrase.abbreviation, query) : false)
+    if (!query) return sorted;
+    return sorted.filter((phrase) =>
+      pinyinMatch(phrase.title, query) ||
+      pinyinMatch(phrase.content, query) ||
+      (phrase.abbreviation ? pinyinMatch(phrase.abbreviation, query) : false) ||
+      (phrase.tags ? pinyinMatch(phrase.tags, query) : false)
     );
-  }, [phrases, searchQuery]);
+  }, [phraseView, phrases, searchQuery, selectedTag]);
+
+  const phraseViewCounts = useMemo(() => {
+    const duplicateIds = findDuplicatePhraseIds(phrases);
+    return {
+      all: phrases.length,
+      favorites: phrases.filter((phrase) => phrase.favorite).length,
+      recent: phrases.filter((phrase) => Boolean(phrase.last_used_at)).length,
+      frequent: phrases.filter((phrase) => (phrase.usage_count || 0) > 0).length,
+      duplicates: duplicateIds.size,
+    };
+  }, [phrases]);
+
+  const allTags = useMemo(() => Array.from(new Set(phrases.flatMap(phraseTags))).sort((a, b) => a.localeCompare(b)), [phrases]);
+  const filteredClipboardHistory = useMemo(() => {
+    const query = clipboardSearch.trim().toLowerCase();
+    return clipboardHistory.filter((item) => !query || item.text.toLowerCase().includes(query));
+  }, [clipboardHistory, clipboardSearch]);
 
   async function saveGroup() {
     if (!editingGroup?.name?.trim()) return;
     if (editingGroup.id) {
-      await updateGroup(editingGroup.id, editingGroup.name.trim(), editingGroup.icon || "📁");
+      await updateGroup(editingGroup.id, editingGroup.name.trim(), editingGroup.icon || "*");
     } else {
-      const group = await createGroup(editingGroup.name.trim(), editingGroup.icon || "📁");
+      const group = await createGroup(editingGroup.name.trim(), editingGroup.icon || "*");
       setSelectedGroup(group.id);
     }
     setEditingGroup(null);
@@ -139,7 +207,7 @@ export default function SettingsPage() {
   }
 
   async function removeGroup(groupId: string) {
-    if (!confirm("删除分组会同时删除其中的短语，确定继续？")) return;
+    if (!confirm(t("phrase.groupDeleteConfirm"))) return;
     await deleteGroup(groupId);
     setSelectedGroup(null);
     await loadGroups();
@@ -148,27 +216,20 @@ export default function SettingsPage() {
 
   async function savePhrase() {
     if (!editingPhrase?.title.trim() || !editingPhrase.group_id) return;
+    const args = [
+      editingPhrase.group_id,
+      editingPhrase.title.trim(),
+      editingPhrase.content || "",
+      editingPhrase.content_type,
+      editingPhrase.image_data || null,
+      editingPhrase.hotkey || null,
+      editingPhrase.abbreviation || null,
+      normalizeTags(editingPhrase.tags || ""),
+    ] as const;
     if (editingPhrase.id) {
-      await updatePhrase(
-        editingPhrase.id,
-        editingPhrase.group_id,
-        editingPhrase.title.trim(),
-        editingPhrase.content || "",
-        editingPhrase.content_type,
-        editingPhrase.image_data || null,
-        editingPhrase.hotkey || null,
-        editingPhrase.abbreviation || null
-      );
+      await updatePhrase(editingPhrase.id, ...args);
     } else {
-      await createPhrase(
-        editingPhrase.group_id,
-        editingPhrase.title.trim(),
-        editingPhrase.content || "",
-        editingPhrase.content_type,
-        editingPhrase.image_data || null,
-        editingPhrase.hotkey || null,
-        editingPhrase.abbreviation || null
-      );
+      await createPhrase(...args);
     }
     setEditingPhrase(null);
     await loadPhrases();
@@ -177,12 +238,7 @@ export default function SettingsPage() {
   async function saveExpansion() {
     if (!editingExpansion?.abbreviation?.trim() || !editingExpansion.expanded_text?.trim()) return;
     if (editingExpansion.id) {
-      await updateTextExpansion(
-        editingExpansion.id,
-        editingExpansion.abbreviation.trim(),
-        editingExpansion.expanded_text,
-        editingExpansion.enabled ?? true
-      );
+      await updateTextExpansion(editingExpansion.id, editingExpansion.abbreviation.trim(), editingExpansion.expanded_text, editingExpansion.enabled ?? true);
     } else {
       await createTextExpansion(editingExpansion.abbreviation.trim(), editingExpansion.expanded_text);
     }
@@ -202,20 +258,27 @@ export default function SettingsPage() {
     setEditingRule((current) => ({ ...(current || {}), process_name: processName }));
   }
 
-  async function saveDefaultGroup(groupId: string) {
-    await updateSetting("default_group_id", groupId);
+  async function addCurrentProcessToBlacklist() {
+    const processName = await getActiveProcessName();
+    const values = new Set(disabledProcesses.split(/\r?\n/).map((item) => item.trim()).filter(Boolean));
+    values.add(processName);
+    await saveSetting("disabled_processes", Array.from(values).join("\n"));
+  }
+
+  async function saveSetting(key: string, value: string) {
+    await updateSetting(key, value);
     await loadSettings();
   }
 
   async function toggleAutostart() {
     const next = !autostartEnabled;
-    setAutostartStatus(next ? "正在写入开机自启..." : "正在关闭开机自启...");
+    setAutostartStatus(next ? t("settings.autostartEnabling") : t("settings.autostartDisabling"));
     try {
       const actual = await setAutostartEnabled(next);
       setAutostartEnabledState(actual);
-      setAutostartStatus(actual ? "已写入系统自启项。下次开机会后台启动。" : "已关闭开机自启。");
+      setAutostartStatus(actual ? t("settings.autostartEnabled") : t("settings.autostartDisabled"));
     } catch (error) {
-      setAutostartStatus(`设置失败：${String(error)}`);
+      setAutostartStatus(t("settings.failed", { error: String(error) }));
       await loadAutostart();
     }
   }
@@ -227,16 +290,7 @@ export default function SettingsPage() {
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(file);
     });
-    setEditingPhrase((current) =>
-      current
-        ? {
-            ...current,
-            content_type: "image",
-            image_data: dataUrl.split(",")[1] || dataUrl,
-            content: file.name,
-          }
-        : current
-    );
+    setEditingPhrase((current) => current ? { ...current, content_type: "image", image_data: dataUrl.split(",")[1] || dataUrl, content: file.name } : current);
   }
 
   async function handleExport() {
@@ -252,7 +306,7 @@ export default function SettingsPage() {
 
   async function handleImport() {
     if (!importText.trim()) return;
-    if (!confirm("导入会覆盖现有数据，确定继续？")) return;
+    if (!confirm(t("settings.importConfirm"))) return;
     await importData(importText);
     setImportText("");
     await Promise.all([loadGroups(), loadPhrases(), loadExpansions(), loadRules(), loadSettings()]);
@@ -267,33 +321,23 @@ export default function SettingsPage() {
       image_data: null,
       hotkey: null,
       abbreviation: null,
+      tags: null,
     };
   }
 
   async function newPhraseFromClipboard() {
-    const draft = newPhraseDraft();
-    const clipboardDraft = await readClipboardPhraseDraft();
-    setEditingPhrase({ ...draft, ...clipboardDraft });
+    setEditingPhrase({ ...newPhraseDraft(), ...(await readClipboardPhraseDraft()) });
   }
 
   async function readClipboardPhraseDraft(): Promise<Partial<ClipboardPhraseDraft>> {
     const imageDraft = await readClipboardImageDraft();
     if (imageDraft) return imageDraft;
-
     try {
       const text = await readText();
-      if (text.trim()) {
-        return {
-          content_type: "text",
-          title: text.trim().split(/\r?\n/)[0].slice(0, 32) || "剪贴板文本",
-          content: text,
-          image_data: null,
-        };
-      }
+      if (text.trim()) return { content_type: "text", title: toTitle(text, t("clipboard.title")), content: text, image_data: null };
     } catch {
-      // Clipboard may not contain text. Keep an empty draft.
+      // Clipboard may not contain text.
     }
-
     return {};
   }
 
@@ -302,143 +346,113 @@ export default function SettingsPage() {
       const image = await readImage();
       const [rgba, size] = await Promise.all([image.rgba(), image.size()]);
       const dataUrl = rgbaToPngDataUrl(rgba, size.width, size.height);
-      return {
-        content_type: "image",
-        title: "剪贴板图片",
-        content: "剪贴板图片",
-        image_data: dataUrl.split(",")[1] || dataUrl,
-      };
+      return { content_type: "image", title: t("clipboard.imageTitle"), content: t("clipboard.imageTitle"), image_data: dataUrl.split(",")[1] || dataUrl };
     } catch {
       return null;
     }
   }
 
-  function applyPastedText(text: string) {
-    if (!text.trim()) return;
-    setEditingPhrase((current) =>
-      current
-        ? {
-            ...current,
-            content_type: "text",
-            title: current.title || text.trim().split(/\r?\n/)[0].slice(0, 32) || "粘贴文本",
-            content: text,
-            image_data: null,
-          }
-        : current
-    );
-  }
-
   async function handlePhrasePaste(event: React.ClipboardEvent) {
     if (!editingPhrase) return;
-
-    const imageFile = Array.from(event.clipboardData.items)
-      .find((item) => item.type.startsWith("image/"))
-      ?.getAsFile();
-
+    const imageFile = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/"))?.getAsFile();
     if (imageFile) {
       event.preventDefault();
       await handleImageFile(imageFile);
       return;
     }
-
     const text = event.clipboardData.getData("text/plain");
     if (text && editingPhrase.content_type === "image") {
       event.preventDefault();
-      applyPastedText(text);
+      setEditingPhrase({ ...editingPhrase, content_type: "text", title: editingPhrase.title || toTitle(text, t("clipboard.title")), content: text, image_data: null });
     }
   }
 
   function captureHotkey(event: React.KeyboardEvent<HTMLInputElement>) {
     event.preventDefault();
     event.stopPropagation();
-
     if (event.key === "Backspace" || event.key === "Delete") {
       setEditingPhrase((current) => (current ? { ...current, hotkey: null } : current));
       return;
     }
-
     const key = hotkeyKeyLabel(event);
     if (!key) return;
-
     const parts: string[] = [];
     if (event.ctrlKey) parts.push("Ctrl");
     if (event.altKey) parts.push("Alt");
     if (event.shiftKey) parts.push("Shift");
     if (event.metaKey) parts.push("Meta");
-
     if (parts.length === 0) return;
-    parts.push(key);
-    setEditingPhrase((current) => (current ? { ...current, hotkey: parts.join("+") } : current));
+    setEditingPhrase((current) => (current ? { ...current, hotkey: [...parts, key].join("+") } : current));
   }
 
-  function hotkeyKeyLabel(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return "";
-    if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3);
-    if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5);
-    if (/^Numpad[0-9]$/.test(event.code)) return event.code.slice(6);
-    if (/^F([1-9]|1[0-2])$/.test(event.key)) return event.key;
+  async function captureClipboardText() {
+    try {
+      const trimmed = (await readText()).trim();
+      if (!trimmed) return setClipboardStatus(t("clipboard.noText"));
+      if (isSensitiveClipboardText(trimmed)) return setClipboardStatus(t("clipboard.sensitive"));
+      const next = addClipboardItem(clipboardHistory, trimmed);
+      saveClipboardHistory(next);
+      setClipboardHistory(next);
+      setClipboardStatus(t("clipboard.captured"));
+    } catch (error) {
+      setClipboardStatus(String(error));
+    }
+  }
 
-    const map: Record<string, string> = {
-      Space: "Space",
-      Enter: "Enter",
-      Escape: "Escape",
-      Tab: "Tab",
-      Minus: "-",
-      Equal: "=",
-      Semicolon: ";",
-      Quote: "'",
-      Comma: ",",
-      Period: ".",
-      Slash: "/",
-      Backslash: "\\",
-      BracketLeft: "[",
-      BracketRight: "]",
-      Backquote: "`",
-      NumpadAdd: "+",
-      NumpadSubtract: "-",
-      NumpadMultiply: "*",
-      NumpadDivide: "/",
-      NumpadDecimal: ".",
-    };
+  function toggleClipboardFavorite(id: string) {
+    const next = clipboardHistory.map((item) => item.id === id ? { ...item, favorite: !item.favorite } : item);
+    saveClipboardHistory(next);
+    setClipboardHistory(next);
+  }
 
-    return map[event.code] || "";
+  function deleteClipboardItem(id: string) {
+    const next = clipboardHistory.filter((item) => item.id !== id);
+    saveClipboardHistory(next);
+    setClipboardHistory(next);
+  }
+
+  function clearClipboardHistory() {
+    if (!confirm(t("clipboard.clearConfirm"))) return;
+    saveClipboardHistory([]);
+    setClipboardHistory([]);
+  }
+
+  function createPhraseFromClipboardItem(item: ClipboardHistoryItem) {
+    setTab("phrases");
+    setEditingPhrase({ ...newPhraseDraft(), title: toTitle(item.text, t("clipboard.title")), content: item.text });
+  }
+
+  async function togglePhraseFavorite(phrase: Phrase) {
+    await updatePhraseFavorite(phrase.id, !phrase.favorite);
+    await loadPhrases();
   }
 
   function phraseImageSrc(phrase: Phrase) {
     if (!phrase.image_data) return "";
-    return phrase.image_data.startsWith("data:")
-      ? phrase.image_data
-      : `data:image/png;base64,${phrase.image_data}`;
+    return phrase.image_data.startsWith("data:") ? phrase.image_data : `data:image/png;base64,${phrase.image_data}`;
   }
+
+  const navItems = [
+    { id: "phrases" as Tab, label: t("nav.phrases"), icon: ClipboardList },
+    { id: "expansions" as Tab, label: t("nav.expansions"), icon: Type },
+    { id: "clipboard" as Tab, label: t("nav.clipboard"), icon: Clipboard },
+    { id: "process" as Tab, label: t("nav.apps"), icon: Monitor },
+    { id: "settings" as Tab, label: t("nav.settings"), icon: SettingsIcon },
+  ];
 
   return (
     <div className="flex h-screen bg-qs-bg text-qs-text">
       <aside className="flex w-60 shrink-0 flex-col border-r border-qs-border bg-qs-surface">
         <div className="border-b border-qs-border p-4">
           <h1 className="flex items-center gap-2 text-lg font-semibold">
-            <Zap className="h-5 w-5 text-qs-accent" />
-            QuickSend
+            <Zap className="h-5 w-5 text-qs-accent" /> QuickSend
           </h1>
-          <p className="mt-1 text-xs text-qs-textMuted">快速短语、热键和文本扩展</p>
+          <p className="mt-1 text-xs text-qs-textMuted">{t("app.subtitle")}</p>
         </div>
         <nav className="flex-1 space-y-1 p-2">
-          {[
-            { id: "phrases" as Tab, label: "短语管理", icon: ClipboardList },
-            { id: "expansions" as Tab, label: "文本扩展", icon: Type },
-            { id: "process" as Tab, label: "进程规则", icon: Monitor },
-            { id: "settings" as Tab, label: "设置与备份", icon: SettingsIcon },
-          ].map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setTab(item.id)}
-              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
-                tab === item.id
-                  ? "bg-qs-accent text-white"
-                  : "text-qs-textMuted hover:bg-qs-surface2 hover:text-qs-text"
-              }`}
-            >
-              <item.icon className="h-4 w-4" />
-              {item.label}
+          {navItems.map((item) => (
+            <button key={item.id} onClick={() => setTab(item.id)} className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${tab === item.id ? "bg-qs-accent text-white" : "text-qs-textMuted hover:bg-qs-surface2 hover:text-qs-text"}`}>
+              <item.icon className="h-4 w-4" /> {item.label}
             </button>
           ))}
         </nav>
@@ -447,37 +461,17 @@ export default function SettingsPage() {
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-qs-border p-4">
           <div>
-            <h2 className="text-lg font-semibold">
-              {tab === "phrases" && "短语管理"}
-              {tab === "expansions" && "文本扩展"}
-              {tab === "process" && "进程默认分组"}
-              {tab === "settings" && "设置与备份"}
-            </h2>
-            <p className="mt-0.5 text-xs text-qs-textMuted">
-              Ctrl+Alt+Q 呼出弹窗；单击粘贴，右键复制；缩写后按空格展开。
-            </p>
+            <h2 className="text-lg font-semibold">{navItems.find((item) => item.id === tab)?.label}</h2>
+            <p className="mt-0.5 text-xs text-qs-textMuted">{t("header.help")}</p>
           </div>
           <div className="flex gap-2">
-            {tab === "phrases" && (
-              <>
-                <button className="toolbar-button" onClick={() => setEditingGroup({ icon: "📁" })}>
-                  <FolderPlus className="h-4 w-4" /> 新建分组
-                </button>
-                <button className="primary-button" onClick={newPhraseFromClipboard}>
-                  <Plus className="h-4 w-4" /> 新建短语
-                </button>
-              </>
-            )}
-            {tab === "expansions" && (
-              <button className="primary-button" onClick={() => setEditingExpansion({ enabled: true })}>
-                <Plus className="h-4 w-4" /> 新建扩展
-              </button>
-            )}
-            {tab === "process" && (
-              <button className="primary-button" onClick={() => setEditingRule({ group_id: groups[0]?.id })}>
-                <Plus className="h-4 w-4" /> 新建规则
-              </button>
-            )}
+            {tab === "phrases" && <>
+              <button className="toolbar-button" onClick={() => setEditingGroup({ icon: "*" })}><FolderPlus className="h-4 w-4" /> {t("action.group")}</button>
+              <button className="primary-button" onClick={newPhraseFromClipboard}><Plus className="h-4 w-4" /> {t("action.phrase")}</button>
+            </>}
+            {tab === "expansions" && <button className="primary-button" onClick={() => setEditingExpansion({ enabled: true })}><Plus className="h-4 w-4" /> {t("action.expansion")}</button>}
+            {tab === "clipboard" && <button className="primary-button" onClick={captureClipboardText}><Clipboard className="h-4 w-4" /> {t("action.capture")}</button>}
+            {tab === "process" && <button className="primary-button" onClick={() => setEditingRule({ group_id: groups[0]?.id })}><Plus className="h-4 w-4" /> {t("action.rule")}</button>}
           </div>
         </header>
 
@@ -485,391 +479,202 @@ export default function SettingsPage() {
           {tab === "phrases" && (
             <div className="flex h-full gap-4">
               <div className="w-56 shrink-0 space-y-1">
-                <button
-                  onClick={() => setSelectedGroup(null)}
-                  className={`group-row ${selectedGroup === null ? "group-row-active" : ""}`}
-                >
-                  <span>📚 全部短语</span>
-                </button>
+                <button onClick={() => setSelectedGroup(null)} className={`group-row ${selectedGroup === null ? "group-row-active" : ""}`}>{t("phrase.allPhrases")}</button>
                 {groups.map((group) => (
                   <div key={group.id} className={`group-row ${selectedGroup === group.id ? "group-row-active" : ""}`}>
-                    <button className="min-w-0 flex-1 truncate text-left" onClick={() => setSelectedGroup(group.id)}>
-                      {group.icon} {group.name}
-                    </button>
-                    <button className="icon-button" onClick={() => setEditingGroup(group)}>
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    <button className="icon-button danger" onClick={() => removeGroup(group.id)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <button className="min-w-0 flex-1 truncate text-left" onClick={() => setSelectedGroup(group.id)}>{group.icon} {group.name}</button>
+                    <button className="icon-button" onClick={() => setEditingGroup(group)} title={t("group.edit")}><Pencil className="h-3.5 w-3.5" /></button>
+                    <button className="icon-button danger" onClick={() => removeGroup(group.id)} title={t("group.delete")}><Trash2 className="h-3.5 w-3.5" /></button>
                   </div>
                 ))}
               </div>
-
               <div className="min-w-0 flex-1">
-                <div className="relative mb-3">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-qs-textMuted" />
-                  <input
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder="搜索标题、内容、缩写或中文首字母"
-                    className="field pl-9"
-                  />
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {([
+                    ["all", "phrase.view.all", phraseViewCounts.all],
+                    ["favorites", "phrase.view.favorites", phraseViewCounts.favorites],
+                    ["recent", "phrase.view.recent", phraseViewCounts.recent],
+                    ["frequent", "phrase.view.frequent", phraseViewCounts.frequent],
+                    ["duplicates", "phrase.view.duplicates", phraseViewCounts.duplicates],
+                  ] as [PhraseView, string, number][]).map(([id, label, count]) => (
+                    <button key={id} onClick={() => setPhraseView(id)} className={`rounded-md px-2.5 py-1 text-xs transition-colors ${phraseView === id ? "bg-qs-accent text-white" : "bg-qs-surface text-qs-textMuted hover:bg-qs-surface2 hover:text-qs-text"}`}>
+                      {t(label)} {count}
+                    </button>
+                  ))}
                 </div>
+                {allTags.length > 0 && (
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    <button onClick={() => setSelectedTag(null)} className={`rounded-md px-2.5 py-1 text-xs transition-colors ${selectedTag === null ? "bg-qs-accent text-white" : "bg-qs-surface text-qs-textMuted hover:bg-qs-surface2 hover:text-qs-text"}`}>{t("phrase.allTags")}</button>
+                    {allTags.map((tag) => <button key={tag} onClick={() => setSelectedTag(tag)} className={`rounded-md px-2.5 py-1 text-xs transition-colors ${selectedTag === tag ? "bg-qs-accent text-white" : "bg-qs-surface text-qs-textMuted hover:bg-qs-surface2 hover:text-qs-text"}`}>#{tag}</button>)}
+                  </div>
+                )}
+                <SearchBox value={searchQuery} onChange={setSearchQuery} placeholder={t("phrase.search")} />
                 <div className="space-y-2">
                   {filteredPhrases.map((phrase) => (
                     <div key={phrase.id} className="item-row">
-                      {phrase.content_type === "image" && phrase.image_data ? (
-                        <img
-                          src={phraseImageSrc(phrase)}
-                          alt=""
-                          className="h-12 w-12 shrink-0 rounded-md border border-qs-border object-cover"
-                        />
-                      ) : phrase.content_type === "image" ? (
-                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-qs-border bg-qs-bg text-qs-textMuted">
-                          <FileImage className="h-5 w-5" />
-                        </div>
-                      ) : null}
+                      {phrase.content_type === "image" && phrase.image_data ? <img src={phraseImageSrc(phrase)} alt="" className="h-12 w-12 shrink-0 rounded-md border border-qs-border object-cover" /> : phrase.content_type === "image" ? <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-qs-border bg-qs-bg text-qs-textMuted"><FileImage className="h-5 w-5" /></div> : null}
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="truncate text-sm font-medium">{phrase.title}</span>
-                          {phrase.content_type === "image" && <span className="badge">图片</span>}
+                          {phrase.content_type === "image" && <span className="badge">{t("phrase.image")}</span>}
                           {phrase.hotkey && <kbd className="kbd">{phrase.hotkey}</kbd>}
                           {phrase.abbreviation && <kbd className="kbd accent">{phrase.abbreviation}</kbd>}
+                          {phraseTags(phrase).map((tag) => <span key={tag} className="badge muted">#{tag}</span>)}
+                          {phraseView === "duplicates" && <span className="badge muted">{t("phrase.duplicate")}</span>}
+                          {(phrase.usage_count || 0) > 0 && <span className="text-[11px] text-qs-textMuted">{t("phrase.used", { count: phrase.usage_count })}</span>}
                         </div>
-                        <p className="mt-1 line-clamp-2 text-xs text-qs-textMuted">
-                          {phrase.content_type === "image" ? phrase.content || "图片内容" : phrase.content}
-                        </p>
+                        <p className="mt-1 line-clamp-2 text-xs text-qs-textMuted">{phrase.content_type === "image" ? phrase.content || t("phrase.imageContent") : phrase.content}</p>
                       </div>
-                      <button className="icon-button" onClick={() => setEditingPhrase({ ...phrase })}>
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button
-                        className="icon-button danger"
-                        onClick={async () => {
-                          if (!confirm("确定删除这条短语？")) return;
-                          await deletePhrase(phrase.id);
-                          await loadPhrases();
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <button className={`icon-button ${phrase.favorite ? "text-qs-warning" : ""}`} onClick={() => togglePhraseFavorite(phrase)} title={phrase.favorite ? t("phrase.unfavorite") : t("phrase.favorite")}><Star className={`h-4 w-4 ${phrase.favorite ? "fill-current" : ""}`} /></button>
+                      <button className="icon-button" onClick={() => setEditingPhrase({ ...phrase })} title={t("phrase.edit")}><Pencil className="h-4 w-4" /></button>
+                      <button className="icon-button danger" title={t("phrase.delete")} onClick={async () => { if (!confirm(t("phrase.deleteConfirm"))) return; await deletePhrase(phrase.id); await loadPhrases(); }}><Trash2 className="h-4 w-4" /></button>
                     </div>
                   ))}
-                  {filteredPhrases.length === 0 && <EmptyState text="暂无短语" />}
+                  {filteredPhrases.length === 0 && <EmptyState text={t("phrase.none")} />}
                 </div>
               </div>
             </div>
           )}
 
           {tab === "expansions" && (
-            <div className="space-y-2">
+            <div className="space-y-3">
+              <Panel title={t("expansion.behavior")}>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="flex items-center justify-between gap-4 rounded-lg bg-qs-bg p-3">
+                    <span><span className="block text-sm text-qs-text">{t("expansion.requirePrefix")}</span><span className="mt-1 block text-xs text-qs-textMuted">{t("expansion.requirePrefixHint")}</span></span>
+                    <input type="checkbox" checked={requireTriggerPrefix} onChange={(event) => saveSetting("text_expansion_require_prefix", String(event.target.checked))} />
+                  </label>
+                  <label><span className="label">{t("expansion.allowedPrefixes")}</span><input className="field" value={triggerPrefixes} onChange={(event) => saveSetting("text_expansion_prefixes", event.target.value)} placeholder={DEFAULT_TRIGGER_PREFIXES} /></label>
+                </div>
+              </Panel>
               {expansions.map((item) => (
                 <div key={item.id} className="item-row">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <kbd className="kbd accent">{item.abbreviation}</kbd>
-                      <span className="text-xs text-qs-textMuted">按空格展开</span>
-                      <span className={`badge ${item.enabled ? "" : "muted"}`}>
-                        {item.enabled ? "启用" : "停用"}
-                      </span>
-                    </div>
-                    <p className="mt-1 whitespace-pre-wrap text-sm text-qs-text">{item.expanded_text}</p>
-                  </div>
-                  <button
-                    className="toolbar-button"
-                    onClick={async () => {
-                      await updateTextExpansion(item.id, item.abbreviation, item.expanded_text, !item.enabled);
-                      await loadExpansions();
-                    }}
-                  >
-                    {item.enabled ? "停用" : "启用"}
-                  </button>
-                  <button className="icon-button" onClick={() => setEditingExpansion(item)}>
-                    <Pencil className="h-4 w-4" />
-                  </button>
-                  <button
-                    className="icon-button danger"
-                    onClick={async () => {
-                      if (!confirm("确定删除这条文本扩展？")) return;
-                      await deleteTextExpansion(item.id);
-                      await loadExpansions();
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><kbd className="kbd accent">{item.abbreviation}</kbd><span className="text-xs text-qs-textMuted">{t("expansion.spaceToExpand")}</span><span className={`badge ${item.enabled ? "" : "muted"}`}>{item.enabled ? t("expansion.enabled") : t("expansion.disabled")}</span></div><p className="mt-1 whitespace-pre-wrap text-sm text-qs-text">{item.expanded_text}</p></div>
+                  <button className="toolbar-button" onClick={async () => { await updateTextExpansion(item.id, item.abbreviation, item.expanded_text, !item.enabled); await loadExpansions(); }}>{item.enabled ? t("action.disable") : t("action.enable")}</button>
+                  <button className="icon-button" onClick={() => setEditingExpansion(item)} title={t("dialog.editExpansion")}><Pencil className="h-4 w-4" /></button>
+                  <button className="icon-button danger" title={t("phrase.delete")} onClick={async () => { if (!confirm(t("expansion.deleteConfirm"))) return; await deleteTextExpansion(item.id); await loadExpansions(); }}><Trash2 className="h-4 w-4" /></button>
                 </div>
               ))}
-              {expansions.length === 0 && <EmptyState text="暂无文本扩展规则" />}
+              {expansions.length === 0 && <EmptyState text={t("expansion.none")} />}
+            </div>
+          )}
+
+          {tab === "clipboard" && (
+            <div className="space-y-3">
+              <Panel title={t("clipboard.history")}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button className="primary-button" onClick={captureClipboardText}><Clipboard className="h-4 w-4" /> {t("clipboard.captureCurrent")}</button>
+                  <button className={autoCaptureClipboard ? "primary-button" : "toolbar-button"} onClick={() => saveSetting("auto_capture_clipboard", String(!autoCaptureClipboard))}>{autoCaptureClipboard ? t("clipboard.autoOn") : t("clipboard.autoOff")}</button>
+                  <button className="toolbar-button" onClick={clearClipboardHistory}>{t("action.clear")}</button>
+                  {clipboardStatus && <span className="text-xs text-qs-textMuted">{clipboardStatus}</span>}
+                </div>
+                <p className="mt-2 text-xs text-qs-textMuted">{t("clipboard.help")}</p>
+              </Panel>
+              <SearchBox value={clipboardSearch} onChange={setClipboardSearch} placeholder={t("clipboard.search")} />
+              {filteredClipboardHistory.map((item) => (
+                <div key={item.id} className="item-row">
+                  <div className="min-w-0 flex-1"><div className="mb-1 flex items-center gap-2"><span className="text-xs text-qs-textMuted">{new Date(item.created_at).toLocaleString()}</span>{item.favorite && <span className="badge">{t("clipboard.favorite")}</span>}</div><p className="line-clamp-2 whitespace-pre-wrap text-sm text-qs-text">{item.text}</p></div>
+                  <button className={`icon-button ${item.favorite ? "text-qs-warning" : ""}`} onClick={() => toggleClipboardFavorite(item.id)} title={t("clipboard.favorite")}><Star className={`h-4 w-4 ${item.favorite ? "fill-current" : ""}`} /></button>
+                  <button className="toolbar-button" onClick={() => createPhraseFromClipboardItem(item)}>{t("action.toPhrase")}</button>
+                  <button className="icon-button danger" onClick={() => deleteClipboardItem(item.id)} title={t("phrase.delete")}><Trash2 className="h-4 w-4" /></button>
+                </div>
+              ))}
+              {filteredClipboardHistory.length === 0 && <EmptyState text={t("clipboard.none")} />}
             </div>
           )}
 
           {tab === "process" && (
-            <div className="space-y-2">
-              {processRules.map((rule) => {
-                const group = groups.find((item) => item.id === rule.group_id);
-                return (
-                  <div key={rule.id} className="item-row">
-                    <Monitor className="h-4 w-4 text-qs-textMuted" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium">{rule.process_name}</p>
-                      <p className="text-xs text-qs-textMuted">默认显示：{group ? `${group.icon} ${group.name}` : "未知分组"}</p>
-                    </div>
-                    <button className="icon-button" onClick={() => setEditingRule(rule)}>
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button
-                      className="icon-button danger"
-                      onClick={async () => {
-                        await deleteProcessRule(rule.id);
-                        await loadRules();
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                );
-              })}
-              {processRules.length === 0 && <EmptyState text="暂无进程规则" />}
+            <div className="space-y-4">
+              <Panel title={t("apps.disabled")}>
+                <div className="flex gap-2"><textarea className="field h-28 font-mono text-xs" value={disabledProcesses} onChange={(event) => saveSetting("disabled_processes", event.target.value)} placeholder={"code.exe\nwechat.exe"} /><button className="toolbar-button shrink-0 self-start" onClick={addCurrentProcessToBlacklist}>{t("action.current")}</button></div>
+                <p className="mt-2 text-xs text-qs-textMuted">{t("apps.disabledHelp")}</p>
+              </Panel>
+              <Panel title={t("apps.defaultByApp")}>
+                <div className="space-y-2">
+                  {processRules.map((rule) => {
+                    const group = groups.find((item) => item.id === rule.group_id);
+                    const groupName = group ? `${group.icon} ${group.name}` : t("apps.unknownGroup");
+                    return <div key={rule.id} className="item-row"><Monitor className="h-4 w-4 text-qs-textMuted" /><div className="min-w-0 flex-1"><p className="text-sm font-medium">{rule.process_name}</p><p className="text-xs text-qs-textMuted">{t("apps.default", { group: groupName })}</p></div><button className="icon-button" onClick={() => setEditingRule(rule)} title={t("dialog.editRule")}><Pencil className="h-4 w-4" /></button><button className="icon-button danger" title={t("phrase.delete")} onClick={async () => { await deleteProcessRule(rule.id); await loadRules(); }}><Trash2 className="h-4 w-4" /></button></div>;
+                  })}
+                  {processRules.length === 0 && <EmptyState text={t("apps.none")} />}
+                </div>
+              </Panel>
             </div>
           )}
 
           {tab === "settings" && (
             <div className="max-w-2xl space-y-4">
-              <Panel title="全局默认分组">
-                <select
-                  value={settingsMap.get("default_group_id") || groups[0]?.id || ""}
-                  onChange={(event) => saveDefaultGroup(event.target.value)}
-                  className="field"
-                >
-                  {groups.map((group) => (
-                    <option key={group.id} value={group.id}>
-                      {group.icon} {group.name}
-                    </option>
-                  ))}
-                </select>
+              <Panel title={t("settings.language")}>
+                <label><span className="label">{t("settings.languageMode")}</span><select className="field" value={configuredLanguage} onChange={(event) => setLanguage(event.target.value)}>{languages.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+                <p className="mt-2 text-xs text-qs-textMuted">{t("settings.languageHint")}</p>
+                {languageDir && <p className="mt-2 break-all text-xs text-qs-textMuted">{t("settings.languageDir")}: {languageDir}</p>}
+                <p className="mt-1 text-xs text-qs-textMuted">{t("settings.languageReload")}</p>
               </Panel>
-              <Panel title="开机自启">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-sm text-qs-text">强力开机自启</p>
-                    <p className="mt-1 text-xs text-qs-textMuted">
-                      Windows 会同时写注册表和启动文件夹；macOS/Linux 使用系统标准自启目录。自启时后台启动，不弹设置窗口。
-                    </p>
-                    {autostartStatus && <p className="mt-2 text-xs text-qs-warning">{autostartStatus}</p>}
-                  </div>
-                  <button className={autostartEnabled ? "primary-button" : "toolbar-button"} onClick={toggleAutostart}>
-                    {autostartEnabled ? "已开启" : "开启自启"}
-                  </button>
-                </div>
-              </Panel>
-              <Panel title="数据备份">
-                <div className="flex gap-2">
-                  <button className="primary-button" onClick={handleExport}>
-                    <Download className="h-4 w-4" /> 导出 JSON
-                  </button>
-                  <button className="toolbar-button" onClick={handleImport}>
-                    <Upload className="h-4 w-4" /> 导入下方 JSON
-                  </button>
-                </div>
-                <textarea
-                  value={importText}
-                  onChange={(event) => setImportText(event.target.value)}
-                  className="field mt-3 h-44 font-mono text-xs"
-                  placeholder="粘贴备份 JSON 后点击导入"
-                />
-              </Panel>
-              <Panel title="当前快捷操作">
-                <div className="grid gap-2 text-sm text-qs-textMuted">
-                  <InfoLine label="呼出窗口" value="Ctrl + Alt + Q" />
-                  <InfoLine label="粘贴选中短语" value="Enter 或单击" />
-                  <InfoLine label="复制短语" value="右键短语" />
-                  <InfoLine label="文本扩展" value="输入缩写后按空格" />
-                  <InfoLine label="独立短语热键" value="在短语里填写，如 Ctrl+Shift+1" />
-                </div>
-              </Panel>
+              <Panel title={t("settings.defaultGroup")}><select value={settingsMap.get("default_group_id") || groups[0]?.id || ""} onChange={(event) => saveSetting("default_group_id", event.target.value)} className="field">{groups.map((group) => <option key={group.id} value={group.id}>{group.icon} {group.name}</option>)}</select></Panel>
+              <Panel title={t("settings.autostart")}><div className="flex items-center justify-between gap-4"><div><p className="text-sm text-qs-text">{t("settings.autostartTitle")}</p><p className="mt-1 text-xs text-qs-textMuted">{t("settings.autostartHint")}</p>{autostartStatus && <p className="mt-2 text-xs text-qs-warning">{autostartStatus}</p>}</div><button className={autostartEnabled ? "primary-button" : "toolbar-button"} onClick={toggleAutostart}>{autostartEnabled ? t("expansion.enabled") : t("action.enable")}</button></div></Panel>
+              <Panel title={t("settings.backup")}><div className="flex gap-2"><button className="primary-button" onClick={handleExport}><Download className="h-4 w-4" /> {t("action.exportJson")}</button><button className="toolbar-button" onClick={handleImport}><Upload className="h-4 w-4" /> {t("action.importJson")}</button></div><textarea value={importText} onChange={(event) => setImportText(event.target.value)} className="field mt-3 h-44 font-mono text-xs" placeholder={t("settings.backupPlaceholder")} /></Panel>
+              <Panel title={t("settings.shortcuts")}><div className="grid gap-2 text-sm text-qs-textMuted"><InfoLine label={t("shortcut.openPopup")} value="Ctrl + Alt + Q" /><InfoLine label={t("shortcut.paste")} value={t("shortcut.pasteValue")} /><InfoLine label={t("shortcut.copy")} value={t("shortcut.copyValue")} /><InfoLine label={t("shortcut.expansion")} value={t("shortcut.expansionValue")} /><InfoLine label={t("shortcut.hotkey")} value={t("shortcut.hotkeyValue")} /></div></Panel>
             </div>
           )}
         </section>
       </main>
 
-      {editingGroup && (
-        <Dialog title={editingGroup.id ? "编辑分组" : "新建分组"} onClose={() => setEditingGroup(null)} onSave={saveGroup}>
-          <label className="label">名称</label>
-          <input
-            className="field"
-            value={editingGroup.name || ""}
-            onChange={(event) => setEditingGroup({ ...editingGroup, name: event.target.value })}
-            autoFocus
-          />
-          <label className="label mt-3">图标</label>
-          <div className="grid grid-cols-6 gap-2">
-            {GROUP_ICONS.map((icon) => (
-              <button
-                key={icon}
-                onClick={() => setEditingGroup({ ...editingGroup, icon })}
-                className={`rounded-lg bg-qs-bg p-2 text-lg ${editingGroup.icon === icon ? "ring-2 ring-qs-accent" : ""}`}
-              >
-                {icon}
-              </button>
-            ))}
-          </div>
-        </Dialog>
-      )}
+      {editingGroup && <Dialog title={editingGroup.id ? t("dialog.editGroup") : t("dialog.newGroup")} onClose={() => setEditingGroup(null)} onSave={saveGroup} saveLabel={t("action.save")} cancelLabel={t("action.cancel")}><label className="label">{t("field.name")}</label><input className="field" value={editingGroup.name || ""} onChange={(event) => setEditingGroup({ ...editingGroup, name: event.target.value })} autoFocus /><label className="label mt-3">{t("field.icon")}</label><div className="grid grid-cols-6 gap-2">{GROUP_ICONS.map((icon) => <button key={icon} onClick={() => setEditingGroup({ ...editingGroup, icon })} className={`rounded-lg bg-qs-bg p-2 text-sm ${editingGroup.icon === icon ? "ring-2 ring-qs-accent" : ""}`}>{icon}</button>)}</div></Dialog>}
 
-      {editingPhrase && (
-        <Dialog
-          title={editingPhrase.id ? "编辑短语" : "新建短语"}
-          onClose={() => setEditingPhrase(null)}
-          onSave={savePhrase}
-          onPaste={handlePhrasePaste}
-        >
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">分组</label>
-              <select
-                className="field"
-                value={editingPhrase.group_id}
-                onChange={(event) => setEditingPhrase({ ...editingPhrase, group_id: event.target.value })}
-              >
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.icon} {group.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">类型</label>
-              <select
-                className="field"
-                value={editingPhrase.content_type}
-                onChange={(event) =>
-                  setEditingPhrase({ ...editingPhrase, content_type: event.target.value as "text" | "image" })
-                }
-              >
-                <option value="text">文本</option>
-                <option value="image">图片</option>
-              </select>
-            </div>
-          </div>
-          <label className="label mt-3">标题</label>
-          <input
-            className="field"
-            value={editingPhrase.title}
-            onChange={(event) => setEditingPhrase({ ...editingPhrase, title: event.target.value })}
-          />
-          {editingPhrase.content_type === "text" ? (
-            <>
-              <label className="label mt-3">内容（支持多行）</label>
-              <textarea
-                className="field h-36"
-                value={editingPhrase.content || ""}
-                onChange={(event) => setEditingPhrase({ ...editingPhrase, content: event.target.value })}
-              />
-            </>
-          ) : (
-            <>
-              <label className="label mt-3">图片</label>
-              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-qs-border bg-qs-bg p-4 text-sm text-qs-textMuted hover:border-qs-accent hover:text-qs-text">
-                <FileImage className="h-4 w-4" />
-                选择图片文件，或直接 Ctrl+V 粘贴图片
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) handleImageFile(file);
-                  }}
-                />
-              </label>
-              {editingPhrase.image_data && <p className="mt-2 text-xs text-qs-success">图片已载入</p>}
-            </>
-          )}
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">独立热键</label>
-              <input
-                className="field"
-                placeholder="按下组合键，如 Ctrl+Shift+1"
-                value={editingPhrase.hotkey || ""}
-                onKeyDown={captureHotkey}
-                onChange={() => {}}
-                readOnly
-              />
-              <p className="mt-1 text-xs text-qs-textMuted">按 Backspace 或 Delete 清空。</p>
-            </div>
-            <div>
-              <label className="label">缩写</label>
-              <input
-                className="field"
-                placeholder=";em"
-                value={editingPhrase.abbreviation || ""}
-                onChange={(event) => setEditingPhrase({ ...editingPhrase, abbreviation: event.target.value || null })}
-              />
-            </div>
-          </div>
-        </Dialog>
-      )}
+      {editingPhrase && <Dialog title={editingPhrase.id ? t("dialog.editPhrase") : t("dialog.newPhrase")} onClose={() => setEditingPhrase(null)} onSave={savePhrase} onPaste={handlePhrasePaste} saveLabel={t("action.save")} cancelLabel={t("action.cancel")}><div className="grid grid-cols-2 gap-3"><div><label className="label">{t("field.group")}</label><select className="field" value={editingPhrase.group_id} onChange={(event) => setEditingPhrase({ ...editingPhrase, group_id: event.target.value })}>{groups.map((group) => <option key={group.id} value={group.id}>{group.icon} {group.name}</option>)}</select></div><div><label className="label">{t("field.type")}</label><select className="field" value={editingPhrase.content_type} onChange={(event) => setEditingPhrase({ ...editingPhrase, content_type: event.target.value as "text" | "image" })}><option value="text">{t("field.text")}</option><option value="image">{t("field.image")}</option></select></div></div><label className="label mt-3">{t("field.title")}</label><input className="field" value={editingPhrase.title} onChange={(event) => setEditingPhrase({ ...editingPhrase, title: event.target.value })} />{editingPhrase.content_type === "text" ? <><label className="label mt-3">{t("field.content")}</label><textarea className="field h-36" value={editingPhrase.content || ""} onChange={(event) => setEditingPhrase({ ...editingPhrase, content: event.target.value })} /></> : <><label className="label mt-3">{t("field.image")}</label><label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-qs-border bg-qs-bg p-4 text-sm text-qs-textMuted hover:border-qs-accent hover:text-qs-text"><FileImage className="h-4 w-4" /> {t("field.chooseImage")}<input type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) handleImageFile(file); }} /></label>{editingPhrase.image_data && <p className="mt-2 text-xs text-qs-success">{t("field.imageLoaded")}</p>}</>}<div className="mt-3 grid grid-cols-2 gap-3"><div><label className="label">{t("field.hotkey")}</label><input className="field" placeholder={t("field.hotkeyPlaceholder")} value={editingPhrase.hotkey || ""} onKeyDown={captureHotkey} onChange={() => {}} readOnly /><p className="mt-1 text-xs text-qs-textMuted">{t("field.hotkeyClear")}</p></div><div><label className="label">{t("field.abbreviation")}</label><input className="field" placeholder=";reply" value={editingPhrase.abbreviation || ""} onChange={(event) => setEditingPhrase({ ...editingPhrase, abbreviation: event.target.value || null })} /><p className="mt-1 text-xs text-qs-textMuted">{t("field.abbreviationHint")}</p></div></div><label className="label mt-3">{t("field.tags")}</label><input className="field" placeholder={t("field.tagsPlaceholder")} value={editingPhrase.tags || ""} onChange={(event) => setEditingPhrase({ ...editingPhrase, tags: event.target.value || null })} /><p className="mt-1 text-xs text-qs-textMuted">{t("field.tagsHint")}</p></Dialog>}
 
-      {editingExpansion && (
-        <Dialog
-          title={editingExpansion.id ? "编辑文本扩展" : "新建文本扩展"}
-          onClose={() => setEditingExpansion(null)}
-          onSave={saveExpansion}
-        >
-          <label className="label">缩写</label>
-          <input
-            className="field"
-            placeholder=";em"
-            value={editingExpansion.abbreviation || ""}
-            onChange={(event) => setEditingExpansion({ ...editingExpansion, abbreviation: event.target.value })}
-          />
-          <label className="label mt-3">展开文本</label>
-          <textarea
-            className="field h-32"
-            value={editingExpansion.expanded_text || ""}
-            onChange={(event) => setEditingExpansion({ ...editingExpansion, expanded_text: event.target.value })}
-          />
-        </Dialog>
-      )}
+      {editingExpansion && <Dialog title={editingExpansion.id ? t("dialog.editExpansion") : t("dialog.newExpansion")} onClose={() => setEditingExpansion(null)} onSave={saveExpansion} saveLabel={t("action.save")} cancelLabel={t("action.cancel")}><label className="label">{t("field.abbreviation")}</label><input className="field" placeholder=";addr" value={editingExpansion.abbreviation || ""} onChange={(event) => setEditingExpansion({ ...editingExpansion, abbreviation: event.target.value })} /><label className="label mt-3">{t("field.expandedText")}</label><textarea className="field h-32" value={editingExpansion.expanded_text || ""} onChange={(event) => setEditingExpansion({ ...editingExpansion, expanded_text: event.target.value })} /></Dialog>}
 
-      {editingRule && (
-        <Dialog title={editingRule.id ? "编辑进程规则" : "新建进程规则"} onClose={() => setEditingRule(null)} onSave={saveRule}>
-          <label className="label">进程名</label>
-          <div className="flex gap-2">
-            <input
-              className="field"
-              placeholder="code.exe"
-              value={editingRule.process_name || ""}
-              onChange={(event) => setEditingRule({ ...editingRule, process_name: event.target.value })}
-            />
-            <button className="toolbar-button shrink-0" onClick={captureProcess}>
-              获取当前
-            </button>
-          </div>
-          <label className="label mt-3">默认分组</label>
-          <select
-            className="field"
-            value={editingRule.group_id || ""}
-            onChange={(event) => setEditingRule({ ...editingRule, group_id: event.target.value })}
-          >
-            <option value="">选择分组</option>
-            {groups.map((group) => (
-              <option key={group.id} value={group.id}>
-                {group.icon} {group.name}
-              </option>
-            ))}
-          </select>
-        </Dialog>
-      )}
+      {editingRule && <Dialog title={editingRule.id ? t("dialog.editRule") : t("dialog.newRule")} onClose={() => setEditingRule(null)} onSave={saveRule} saveLabel={t("action.save")} cancelLabel={t("action.cancel")}><label className="label">{t("field.processName")}</label><div className="flex gap-2"><input className="field" placeholder="code.exe" value={editingRule.process_name || ""} onChange={(event) => setEditingRule({ ...editingRule, process_name: event.target.value })} /><button className="toolbar-button shrink-0" onClick={captureProcess}>{t("action.current")}</button></div><label className="label mt-3">{t("field.defaultGroup")}</label><select className="field" value={editingRule.group_id || ""} onChange={(event) => setEditingRule({ ...editingRule, group_id: event.target.value })}><option value="">{t("field.selectGroup")}</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.icon} {group.name}</option>)}</select></Dialog>}
     </div>
   );
 }
 
+function SearchBox({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
+  return <div className="relative mb-3"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-qs-textMuted" /><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="field pl-9" /></div>;
+}
+
 function EmptyState({ text }: { text: string }) {
   return <div className="rounded-lg border border-qs-border bg-qs-surface p-8 text-center text-sm text-qs-textMuted">{text}</div>;
+}
+
+function findDuplicatePhraseIds(phrases: Phrase[]) {
+  const groups = new Map<string, Phrase[]>();
+  for (const phrase of phrases) {
+    const key = normalizePhraseContent(phrase);
+    if (!key) continue;
+    groups.set(key, [...(groups.get(key) || []), phrase]);
+  }
+  const ids = new Set<string>();
+  for (const items of groups.values()) {
+    if (items.length > 1) items.forEach((item) => ids.add(item.id));
+  }
+  return ids;
+}
+
+function normalizePhraseContent(phrase: Phrase) {
+  return `${phrase.content_type}:${phrase.content.replace(/\s+/g, " ").trim().toLowerCase()}`;
+}
+
+function phraseTags(phrase: Phrase) {
+  return splitTags(phrase.tags || "");
+}
+
+function normalizeTags(value: string) {
+  const tags = splitTags(value);
+  return tags.length > 0 ? tags.join(", ") : null;
+}
+
+function splitTags(value: string) {
+  return Array.from(new Set(value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean)));
+}
+
+function compareDateDesc(a: string | null, b: string | null) {
+  return (b ? Date.parse(b) : 0) - (a ? Date.parse(a) : 0);
+}
+
+function toTitle(text: string, fallback: string) {
+  return text.trim().split(/\r?\n/)[0].slice(0, 32) || fallback;
 }
 
 function rgbaToPngDataUrl(rgba: Uint8Array, width: number, height: number) {
@@ -883,54 +688,63 @@ function rgbaToPngDataUrl(rgba: Uint8Array, width: number, height: number) {
 }
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border border-qs-border bg-qs-surface p-4">
-      <h3 className="mb-3 text-sm font-semibold">{title}</h3>
-      {children}
-    </div>
-  );
+  return <div className="rounded-lg border border-qs-border bg-qs-surface p-4"><h3 className="mb-3 text-sm font-semibold">{title}</h3>{children}</div>;
 }
 
 function InfoLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span>{label}</span>
-      <kbd className="kbd">{value}</kbd>
-    </div>
-  );
+  return <div className="flex items-center justify-between gap-4"><span>{label}</span><kbd className="kbd">{value}</kbd></div>;
 }
 
-function Dialog({
-  title,
-  children,
-  onClose,
-  onSave,
-  onPaste,
-}: {
+function Dialog({ title, children, onClose, onSave, onPaste, saveLabel, cancelLabel }: {
   title: string;
   children: React.ReactNode;
   onClose: () => void;
   onSave: () => void;
   onPaste?: (event: React.ClipboardEvent) => void;
+  saveLabel: string;
+  cancelLabel: string;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onMouseDown={onClose}>
-      <div
-        className="max-h-[86vh] w-[560px] overflow-y-auto rounded-xl border border-qs-border bg-qs-surface p-5 shadow-2xl"
-        onMouseDown={(event) => event.stopPropagation()}
-        onPaste={onPaste}
-      >
+      <div className="max-h-[86vh] w-[560px] overflow-y-auto rounded-xl border border-qs-border bg-qs-surface p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()} onPaste={onPaste}>
         <h3 className="mb-4 text-lg font-semibold">{title}</h3>
         {children}
         <div className="mt-5 flex justify-end gap-2">
-          <button className="toolbar-button" onClick={onClose}>
-            取消
-          </button>
-          <button className="primary-button" onClick={onSave}>
-            <Save className="h-4 w-4" /> 保存
-          </button>
+          <button className="toolbar-button" onClick={onClose}>{cancelLabel}</button>
+          <button className="primary-button" onClick={onSave}><Save className="h-4 w-4" /> {saveLabel}</button>
         </div>
       </div>
     </div>
   );
+}
+
+function hotkeyKeyLabel(event: React.KeyboardEvent<HTMLInputElement>) {
+  if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return "";
+  if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3);
+  if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5);
+  if (/^Numpad[0-9]$/.test(event.code)) return event.code.slice(6);
+  if (/^F([1-9]|1[0-2])$/.test(event.key)) return event.key;
+  const map: Record<string, string> = {
+    Space: "Space",
+    Enter: "Enter",
+    Escape: "Escape",
+    Tab: "Tab",
+    Minus: "-",
+    Equal: "=",
+    Semicolon: ";",
+    Quote: "'",
+    Comma: ",",
+    Period: ".",
+    Slash: "/",
+    Backslash: "\\",
+    BracketLeft: "[",
+    BracketRight: "]",
+    Backquote: "`",
+    NumpadAdd: "+",
+    NumpadSubtract: "-",
+    NumpadMultiply: "*",
+    NumpadDivide: "/",
+    NumpadDecimal: ".",
+  };
+  return map[event.code] || "";
 }

@@ -1,284 +1,97 @@
-# QuickSend 小白使用指南
+# QuickSend User Guide
 
-这份文档不讲复杂概念，只讲怎么用。
+QuickSend helps you paste repeated content quickly into any input box.
 
-你可以把 QuickSend 理解成一个“短语抽屉”。常用文字和图片先放进去，用的时候按快捷键打开抽屉，点一下就粘贴。
+## Remember These Shortcuts
 
-## 第一次打开
-
-双击 `quicksend.exe` 后，会打开设置窗口。
-
-如果以后你找不到窗口，可以看 Windows 右下角托盘图标。QuickSend 会在后台运行，不一定一直显示窗口。
-
-## 你需要记住的 3 个动作
-
-| 你想做什么 | 怎么做 |
+| Action | Shortcut |
 | --- | --- |
-| 打开短语窗口 | 按 `Ctrl + Alt + Q` |
-| 粘贴一条短语 | 单击短语 |
-| 关闭短语窗口 | 按 `Esc`，或点击窗口外面 |
+| Open popup | `Ctrl + Alt + Q` |
+| Paste selected phrase | `Enter` or click |
+| Copy phrase only | Right click |
+| Switch group | `Tab` / `Shift + Tab` |
+| Close popup | `Esc` |
+| Expand abbreviation | Type abbreviation, then Space |
 
-## 新建文本短语
+## Phrases
 
-例子：保存自己的邮箱。
+Open `Phrases` in settings to create, edit, delete, favorite, tag, and organize phrases.
 
-1. 打开设置窗口。
-2. 点击“短语管理”。
-3. 点击“新建短语”。
-4. 类型选择“文本”。
-5. 标题填：`我的邮箱`
-6. 内容填：`yourname@example.com`
-7. 点击保存。
+Phrase types:
 
-使用时：
+- `Text`: normal or multi-line text
+- `Image`: pasted or selected image data
 
-1. 在微信、浏览器、文档或其他输入框里点一下，让光标出现。
-2. 按 `Ctrl + Alt + Q`。
-3. 点击“我的邮箱”。
-4. 邮箱会粘贴到光标位置。
+Phrase tools:
 
-## 新建多行短语
+- `Groups`: primary organization
+- `Tags`: comma-separated cross-category labels
+- `Favorites`: pin important phrases
+- `Recent`: phrases used recently
+- `Frequent`: phrases with usage count
+- `Duplicates`: possible duplicate content
 
-例子：保存一段常用回复。
+## Templates
 
-```text
-您好，问题已经收到。
-我这边会尽快处理。
-处理完成后会第一时间回复您。
-```
-
-创建方法和普通文本一样，直接把多行内容粘贴到内容框里保存即可。
-
-以后点击一次，就会把整段多行文字粘贴出去。
-
-## 新建图片短语
-
-图片短语适合保存二维码、表情包、常用截图等。
-
-### 方法一：从剪贴板自动识别
-
-1. 先复制一张图片。
-2. 回到 QuickSend。
-3. 点击“新建短语”。
-4. 如果剪贴板里有图片，软件会自动切换为图片短语。
-5. 填标题并保存。
-
-### 方法二：编辑时粘贴图片
-
-1. 新建短语。
-2. 在编辑窗口里按 `Ctrl + V`。
-3. 图片会被放进短语里。
-4. 保存。
-
-使用图片短语时，点击短语即可粘贴图片。如果目标软件不支持自动粘贴图片，可以右键短语先复制，再手动按 `Ctrl + V`。
-
-## 搜索短语
-
-打开快捷窗口后，直接输入关键词。
-
-例如有一条短语叫“你好”：
-
-| 输入 | 也能搜到 |
-| --- | --- |
-| `你好` | 可以 |
-| `nihao` | 可以 |
-| `nh` | 可以 |
-
-这就是中文拼音和首字母搜索。
-
-## 分组怎么用
-
-分组就是给短语分类。
-
-例子：
-
-- “工作”：放工作回复。
-- “邮箱”：放邮箱、地址、签名。
-- “代码”：放代码片段。
-- “图片”：放二维码、常用图片。
-
-打开快捷窗口后，可以按：
+Variables are written with braces:
 
 ```text
-Tab
+Hello {customer}, your order {order_id} has been handled.
 ```
 
-切换到下一个分组。
-
-按：
+Defaults are supported:
 
 ```text
-Shift + Tab
+Please provide {detail=the order number}.
 ```
 
-切换到上一个分组。
+When a template phrase is selected from the popup, QuickSend asks for values before pasting.
 
-## 文本扩展怎么用
+## Text Expansion
 
-文本扩展就是：输入一个短缩写，然后按空格，自动变成长文本。
+Expansion turns short abbreviations into longer text.
 
-### 例子 1：邮箱
-
-你设置：
-
-| 缩写 | 展开后 |
-| --- | --- |
-| `;em` | `yourname@example.com` |
-
-使用时输入：
+Example:
 
 ```text
-;em
+;email
 ```
 
-然后按空格。
+Type `;email` and press Space.
 
-屏幕上会变成：
+To reduce accidental triggers, QuickSend can require intent prefixes. Configure this in `Expansion`.
 
-```text
-yourname@example.com
-```
+## App Rules
 
-### 例子 2：中文分号也兼容
+Open `Apps` in settings.
 
-如果你设置的是：
+Use:
 
-```text
-；ypf
-```
+- `Disabled apps`: one process name per line. Hotkeys and expansion are disabled there.
+- `Default group by app`: choose which group opens first for specific processes.
 
-你实际输入：
+Use `Add current` or `Current` to capture the foreground process name.
 
-```text
-;ypf
-```
+## Clipboard History
 
-然后按空格，也可以触发。
+Open `Clipboard` in settings.
 
-英文分号 `;` 和中文分号 `；` 会自动兼容。
+You can:
 
-### 重要规则
+- Capture current clipboard text
+- Turn on auto-capture while settings is open
+- Search history
+- Favorite entries
+- Convert an entry to a phrase
+- Delete entries
 
-- 设置的是 `;ypf`，就必须输入 `;ypf` 或 `；ypf`。
-- 只输入 `ypf` 不会触发。
-- 输错了可以退格删除，再重新输入正确缩写。
-- 最后按空格才会触发。
+Sensitive-looking content is skipped, including likely verification codes, cards, passwords, tokens, secrets, and API keys.
 
-## 独立热键怎么用
+## Backup
 
-独立热键就是：不用打开短语窗口，直接按一个快捷键粘贴某条短语。
+Open `Settings`.
 
-例子：让 `Ctrl + Shift + 1` 直接粘贴邮箱。
+- `Export JSON`: save all groups, phrases, expansions, rules, and settings
+- `Import JSON`: replace current data with a previous export
 
-1. 打开“短语管理”。
-2. 编辑“我的邮箱”。
-3. 找到“独立热键”输入框。
-4. 直接按下 `Ctrl + Shift + 1`。
-5. 保存。
-
-以后在任何输入框里按 `Ctrl + Shift + 1`，就会粘贴邮箱。
-
-不建议使用这些快捷键：
-
-- `Ctrl + C`
-- `Ctrl + V`
-- `Ctrl + S`
-- `Alt + Tab`
-
-因为它们通常已经被系统或软件占用。
-
-## 进程规则怎么用
-
-进程规则就是：在不同软件里打开 QuickSend 时，默认显示不同分组。
-
-例子：
-
-| 当前软件 | 默认分组 |
-| --- | --- |
-| 浏览器 | 常用回复 |
-| VS Code | 代码片段 |
-| 邮件软件 | 邮件模板 |
-
-设置方法：
-
-1. 打开“进程规则”。
-2. 点击新建规则。
-3. 点击“获取当前前台应用”，或手动输入进程名。
-4. 选择默认分组。
-5. 保存。
-
-以后在对应软件里按 `Ctrl + Alt + Q`，会优先显示你设置的分组。
-
-## 开机自启
-
-如果你希望电脑开机后 QuickSend 自动运行：
-
-1. 打开“设置与备份”。
-2. 找到“开机自启”。
-3. 打开开关。
-
-Windows 上会尽量使用更稳的方式写入自启配置。打开后，下次开机 QuickSend 会在后台运行。
-
-## 备份和恢复
-
-建议你定期备份，尤其是短语很多的时候。
-
-### 导出备份
-
-1. 打开“设置与备份”。
-2. 点击导出。
-3. 保存 JSON 文件。
-
-### 导入备份
-
-1. 打开“设置与备份”。
-2. 点击导入。
-3. 选择之前导出的 JSON。
-
-注意：导入通常会替换当前数据。导入前最好先导出一份当前备份。
-
-## 常见问题
-
-### 按 `Ctrl + Alt + Q` 没反应
-
-先检查 QuickSend 是否正在运行。可以看看右下角托盘图标。
-
-如果正在运行但没反应，可能是快捷键被别的软件占用了。
-
-### 文本扩展没有触发
-
-请确认：
-
-- 缩写写对了。
-- 缩写前面的分号没有漏。
-- 规则是启用状态。
-- 输入缩写后按的是空格。
-- QuickSend 没有在托盘菜单里关闭文本扩展。
-
-### 为什么输入 `ypf` 不触发
-
-如果你设置的是 `;ypf` 或 `；ypf`，那么前面的分号就是规则的一部分。
-
-所以：
-
-```text
-;ypf + 空格
-```
-
-会触发。
-
-```text
-ypf + 空格
-```
-
-不会触发。
-
-这样可以减少误触发。
-
-### 图片粘贴很慢或失败
-
-图片比文字大，某些软件接收图片也比较慢。可以试试右键图片短语，只复制到剪贴板，再到目标软件里手动粘贴。
-
-### 为什么不能开多个 QuickSend
-
-因为多个 QuickSend 同时运行会抢同一个快捷键，可能导致重复粘贴。现在软件会自动只保留一个实例。
+Always export a fresh backup before importing.

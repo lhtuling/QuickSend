@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Group, Phrase, TextExpansion, ProcessRule, Setting } from "../types";
+import type { Group, Phrase, TextExpansion, ProcessRule, Setting, I18nContext } from "../types";
 
 // ==================== Groups ====================
 export async function getGroups(): Promise<Group[]> {
@@ -42,7 +42,8 @@ export async function createPhrase(
   contentType: string = "text",
   imageData?: string | null,
   hotkey?: string | null,
-  abbreviation?: string | null
+  abbreviation?: string | null,
+  tags?: string | null
 ): Promise<Phrase> {
   return invoke("create_phrase", {
     groupId,
@@ -52,6 +53,7 @@ export async function createPhrase(
     imageData: imageData ?? null,
     hotkey: hotkey ?? null,
     abbreviation: abbreviation ?? null,
+    tags: tags ?? null,
   });
 }
 
@@ -63,7 +65,8 @@ export async function updatePhrase(
   contentType: string = "text",
   imageData?: string | null,
   hotkey?: string | null,
-  abbreviation?: string | null
+  abbreviation?: string | null,
+  tags?: string | null
 ): Promise<void> {
   return invoke("update_phrase", {
     id,
@@ -74,6 +77,7 @@ export async function updatePhrase(
     imageData: imageData ?? null,
     hotkey: hotkey ?? null,
     abbreviation: abbreviation ?? null,
+    tags: tags ?? null,
   });
 }
 
@@ -85,8 +89,20 @@ export async function pastePhrase(id: string): Promise<void> {
   return invoke("paste_phrase", { id });
 }
 
+export async function pasteTextContent(text: string, phraseId?: string): Promise<void> {
+  return invoke("paste_text_content", { text, phraseId: phraseId ?? null });
+}
+
 export async function copyPhraseToClipboard(id: string): Promise<void> {
   return invoke("copy_phrase_to_clipboard", { id });
+}
+
+export async function recordPhraseUsage(id: string): Promise<void> {
+  return invoke("record_phrase_usage", { id });
+}
+
+export async function updatePhraseFavorite(id: string, favorite: boolean): Promise<void> {
+  return invoke("update_phrase_favorite", { id, favorite });
 }
 
 // ==================== Popup ====================
@@ -155,6 +171,10 @@ export async function getSettings(): Promise<Setting[]> {
 
 export async function updateSetting(key: string, value: string): Promise<void> {
   return invoke("update_setting", { key, value });
+}
+
+export async function getI18nContext(): Promise<I18nContext> {
+  return invoke("get_i18n_context");
 }
 
 // ==================== Import/Export ====================
