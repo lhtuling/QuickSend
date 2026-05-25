@@ -182,11 +182,11 @@ fn load_ui_labels(language_setting: Option<&str>, data_dir: &std::path::Path) ->
 
 fn chinese_ui_labels() -> UiLabels {
     UiLabels {
-        settings: "??".to_string(),
-        toggle_expansion: "??????".to_string(),
-        quit: "??".to_string(),
-        tooltip: "QuickSend - ??????".to_string(),
-        settings_title: "QuickSend ??".to_string(),
+        settings: "设置".to_string(),
+        toggle_expansion: "切换快捷输入".to_string(),
+        quit: "退出".to_string(),
+        tooltip: "QuickSend - 快捷短语粘贴".to_string(),
+        settings_title: "QuickSend 设置".to_string(),
     }
 }
 
