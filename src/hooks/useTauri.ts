@@ -173,6 +173,10 @@ export async function updateSetting(key: string, value: string): Promise<void> {
   return invoke("update_setting", { key, value });
 }
 
+export async function setPopupHotkey(hotkey: string): Promise<string> {
+  return invoke("set_popup_hotkey", { hotkey });
+}
+
 export async function getI18nContext(): Promise<I18nContext> {
   return invoke("get_i18n_context");
 }

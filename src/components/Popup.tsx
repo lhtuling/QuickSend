@@ -43,33 +43,37 @@ export default function Popup() {
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    async function loadInitialData() {
-      const [loadedGroups, settings, rules] = await Promise.all([getGroups(), getSettings(), getProcessRules()]);
+  const loadPopupData = useCallback(async () => {
+    const [loadedGroups, settings, rules] = await Promise.all([getGroups(), getSettings(), getProcessRules()]);
 
-      setGroups(loadedGroups);
-      if (loadedGroups.length === 0) {
-        setActiveCategory(CLIPBOARD_CATEGORY_ID);
-        return;
-      }
-
-      const settingsMap = new Map(settings.map((item) => [item.key, item.value]));
-      let groupId = settingsMap.get("default_group_id") || loadedGroups[0].id;
-
-      try {
-        const processName = await getActiveProcessName();
-        const matchedRule = rules.find((rule) => rule.process_name.toLowerCase() === processName.toLowerCase());
-        if (matchedRule) groupId = matchedRule.group_id;
-      } catch {
-        // Process detection is best-effort; fall back to the configured default.
-      }
-
-      if (!loadedGroups.some((group) => group.id === groupId)) groupId = loadedGroups[0].id;
-      setActiveCategory(groupId);
+    setGroups(loadedGroups);
+    if (loadedGroups.length === 0) {
+      setActiveCategory(CLIPBOARD_CATEGORY_ID);
+      setPhrases([]);
+      setSelectedIndex(0);
+      return;
     }
 
-    loadInitialData();
+    const settingsMap = new Map(settings.map((item) => [item.key, item.value]));
+    let groupId = settingsMap.get("default_group_id") || loadedGroups[0].id;
+
+    try {
+      const processName = await getActiveProcessName();
+      const matchedRule = rules.find((rule) => rule.process_name.toLowerCase() === processName.toLowerCase());
+      if (matchedRule) groupId = matchedRule.group_id;
+    } catch {
+      // Process detection is best-effort; fall back to the configured default.
+    }
+
+    if (!loadedGroups.some((group) => group.id === groupId)) groupId = loadedGroups[0].id;
+    setActiveCategory(groupId);
+    setPhrases(await getPhrasesByGroup(groupId));
+    setSelectedIndex(0);
   }, []);
+
+  useEffect(() => {
+    loadPopupData().catch((error) => console.error("Failed to load popup data:", error));
+  }, [loadPopupData]);
 
   useEffect(() => {
     async function loadPhrases() {
@@ -100,6 +104,7 @@ export default function Popup() {
     refreshClipboardHistory();
     const timer = window.setInterval(refreshClipboardHistory, 2500);
     const unlistenPromise = listen("popup-opened", () => {
+      loadPopupData().catch((error) => console.error("Failed to refresh popup data:", error));
       refreshClipboardHistory();
       searchRef.current?.focus();
     });
@@ -107,7 +112,7 @@ export default function Popup() {
       window.clearInterval(timer);
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [refreshClipboardHistory]);
+  }, [loadPopupData, refreshClipboardHistory]);
 
   useEffect(() => {
     const hideOnBlur = () => {

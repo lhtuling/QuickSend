@@ -6,6 +6,7 @@ import {
   Download,
   FileImage,
   FolderPlus,
+  Keyboard,
   Monitor,
   Pencil,
   Plus,
@@ -37,6 +38,7 @@ import {
   getTextExpansions,
   importData,
   setAutostartEnabled,
+  setPopupHotkey,
   setProcessRule,
   updateGroup,
   updatePhrase,
@@ -62,6 +64,7 @@ type ClipboardPhraseDraft = Pick<PhraseDraft, "content_type" | "content" | "imag
 
 const GROUP_ICONS = ["*", "#", "@", "AI", "S", "T", "1", "2", "3", "A", "B", "C"];
 const DEFAULT_TRIGGER_PREFIXES = ";/#:\\";
+const DEFAULT_POPUP_HOTKEY = "Ctrl+Alt+Q";
 
 export default function SettingsPage() {
   const { t, configuredLanguage, languages, languageDir, setLanguage } = useI18n();
@@ -85,12 +88,17 @@ export default function SettingsPage() {
   const [editingExpansion, setEditingExpansion] = useState<Partial<TextExpansion> | null>(null);
   const [editingRule, setEditingRule] = useState<Partial<ProcessRule> | null>(null);
   const [importText, setImportText] = useState("");
+  const [popupHotkeyDraft, setPopupHotkeyDraft] = useState(DEFAULT_POPUP_HOTKEY);
+  const [shortcutStatus, setShortcutStatus] = useState("");
+  const [shortcutStatusTone, setShortcutStatusTone] = useState<"muted" | "success" | "warning">("muted");
 
   const settingsMap = useMemo(() => new Map(settings.map((item) => [item.key, item.value])), [settings]);
   const requireTriggerPrefix = settingsMap.get("text_expansion_require_prefix") !== "false";
   const triggerPrefixes = settingsMap.get("text_expansion_prefixes") || DEFAULT_TRIGGER_PREFIXES;
   const disabledProcesses = settingsMap.get("disabled_processes") || "";
   const autoCaptureClipboard = settingsMap.get("auto_capture_clipboard") === "true";
+  const popupHotkey = settingsMap.get("popup_hotkey") || DEFAULT_POPUP_HOTKEY;
+  const popupHotkeyLabel = formatHotkey(popupHotkey);
 
   const loadGroups = useCallback(async () => {
     const loaded = await getGroups();
@@ -131,6 +139,10 @@ export default function SettingsPage() {
     if (tab === "expansions") loadExpansions();
     if (tab === "process") loadRules();
   }, [loadExpansions, loadRules, tab]);
+
+  useEffect(() => {
+    setPopupHotkeyDraft(popupHotkey);
+  }, [popupHotkey]);
 
   useEffect(() => {
     if (!autoCaptureClipboard) return;
@@ -374,15 +386,40 @@ export default function SettingsPage() {
       setEditingPhrase((current) => (current ? { ...current, hotkey: null } : current));
       return;
     }
-    const key = hotkeyKeyLabel(event);
-    if (!key) return;
-    const parts: string[] = [];
-    if (event.ctrlKey) parts.push("Ctrl");
-    if (event.altKey) parts.push("Alt");
-    if (event.shiftKey) parts.push("Shift");
-    if (event.metaKey) parts.push("Meta");
-    if (parts.length === 0) return;
-    setEditingPhrase((current) => (current ? { ...current, hotkey: [...parts, key].join("+") } : current));
+    const hotkey = hotkeyFromKeyboardEvent(event);
+    if (!hotkey) return;
+    setEditingPhrase((current) => (current ? { ...current, hotkey } : current));
+  }
+
+  function capturePopupHotkey(event: React.KeyboardEvent<HTMLInputElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setShortcutStatus("");
+    if (event.key === "Backspace" || event.key === "Delete") {
+      setPopupHotkeyDraft(DEFAULT_POPUP_HOTKEY);
+      setShortcutStatusTone("muted");
+      setShortcutStatus(t("shortcut.defaultRestored"));
+      return;
+    }
+    const hotkey = hotkeyFromKeyboardEvent(event);
+    if (!hotkey) return;
+    setPopupHotkeyDraft(hotkey);
+  }
+
+  async function savePopupHotkey() {
+    if (!popupHotkeyDraft.trim()) return;
+    setShortcutStatusTone("muted");
+    setShortcutStatus(t("shortcut.checking"));
+    try {
+      const normalized = await setPopupHotkey(popupHotkeyDraft);
+      setPopupHotkeyDraft(normalized);
+      await loadSettings();
+      setShortcutStatusTone("success");
+      setShortcutStatus(t("shortcut.saved"));
+    } catch (error) {
+      setShortcutStatusTone("warning");
+      setShortcutStatus(t("shortcut.conflict", { error: String(error) }));
+    }
   }
 
   async function captureClipboardText() {
@@ -439,6 +476,11 @@ export default function SettingsPage() {
     { id: "process" as Tab, label: t("nav.apps"), icon: Monitor },
     { id: "settings" as Tab, label: t("nav.settings"), icon: SettingsIcon },
   ];
+  const shortcutStatusClass = shortcutStatusTone === "success"
+    ? "text-qs-success"
+    : shortcutStatusTone === "warning"
+      ? "text-qs-warning"
+      : "text-qs-textMuted";
 
   return (
     <div className="flex h-screen bg-qs-bg text-qs-text">
@@ -462,7 +504,7 @@ export default function SettingsPage() {
         <header className="flex items-center justify-between border-b border-qs-border p-4">
           <div>
             <h2 className="text-lg font-semibold">{navItems.find((item) => item.id === tab)?.label}</h2>
-            <p className="mt-0.5 text-xs text-qs-textMuted">{t("header.help")}</p>
+            <p className="mt-0.5 text-xs text-qs-textMuted">{t("header.help", { hotkey: popupHotkeyLabel })}</p>
           </div>
           <div className="flex gap-2">
             {tab === "phrases" && <>
@@ -613,7 +655,29 @@ export default function SettingsPage() {
               <Panel title={t("settings.defaultGroup")}><select value={settingsMap.get("default_group_id") || groups[0]?.id || ""} onChange={(event) => saveSetting("default_group_id", event.target.value)} className="field">{groups.map((group) => <option key={group.id} value={group.id}>{group.icon} {group.name}</option>)}</select></Panel>
               <Panel title={t("settings.autostart")}><div className="flex items-center justify-between gap-4"><div><p className="text-sm text-qs-text">{t("settings.autostartTitle")}</p><p className="mt-1 text-xs text-qs-textMuted">{t("settings.autostartHint")}</p>{autostartStatus && <p className="mt-2 text-xs text-qs-warning">{autostartStatus}</p>}</div><button className={autostartEnabled ? "primary-button" : "toolbar-button"} onClick={toggleAutostart}>{autostartEnabled ? t("expansion.enabled") : t("action.enable")}</button></div></Panel>
               <Panel title={t("settings.backup")}><div className="flex gap-2"><button className="primary-button" onClick={handleExport}><Download className="h-4 w-4" /> {t("action.exportJson")}</button><button className="toolbar-button" onClick={handleImport}><Upload className="h-4 w-4" /> {t("action.importJson")}</button></div><textarea value={importText} onChange={(event) => setImportText(event.target.value)} className="field mt-3 h-44 font-mono text-xs" placeholder={t("settings.backupPlaceholder")} /></Panel>
-              <Panel title={t("settings.shortcuts")}><div className="grid gap-2 text-sm text-qs-textMuted"><InfoLine label={t("shortcut.openPopup")} value="Ctrl + Alt + Q" /><InfoLine label={t("shortcut.paste")} value={t("shortcut.pasteValue")} /><InfoLine label={t("shortcut.copy")} value={t("shortcut.copyValue")} /><InfoLine label={t("shortcut.expansion")} value={t("shortcut.expansionValue")} /><InfoLine label={t("shortcut.hotkey")} value={t("shortcut.hotkeyValue")} /></div></Panel>
+              <Panel title={t("settings.shortcuts")}>
+                <div className="space-y-3">
+                  <div>
+                    <label className="label">{t("shortcut.openPopup")}</label>
+                    <div className="flex gap-2">
+                      <div className="relative min-w-0 flex-1">
+                        <Keyboard className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-qs-textMuted" />
+                        <input className="field pl-9 font-mono" value={popupHotkeyDraft} onKeyDown={capturePopupHotkey} onChange={() => {}} readOnly />
+                      </div>
+                      <button className="primary-button shrink-0" onClick={savePopupHotkey}><Save className="h-4 w-4" /> {t("action.save")}</button>
+                    </div>
+                    <p className="mt-1 text-xs text-qs-textMuted">{t("shortcut.captureHint")}</p>
+                    {shortcutStatus && <p className={`mt-1 text-xs ${shortcutStatusClass}`}>{shortcutStatus}</p>}
+                  </div>
+                  <div className="grid gap-2 text-sm text-qs-textMuted">
+                    <InfoLine label={t("shortcut.currentPopup")} value={popupHotkeyLabel} />
+                    <InfoLine label={t("shortcut.paste")} value={t("shortcut.pasteValue")} />
+                    <InfoLine label={t("shortcut.copy")} value={t("shortcut.copyValue")} />
+                    <InfoLine label={t("shortcut.expansion")} value={t("shortcut.expansionValue")} />
+                    <InfoLine label={t("shortcut.hotkey")} value={t("shortcut.hotkeyValue")} />
+                  </div>
+                </div>
+              </Panel>
             </div>
           )}
         </section>
@@ -716,6 +780,22 @@ function Dialog({ title, children, onClose, onSave, onPaste, saveLabel, cancelLa
       </div>
     </div>
   );
+}
+
+function hotkeyFromKeyboardEvent(event: React.KeyboardEvent<HTMLInputElement>) {
+  const key = hotkeyKeyLabel(event);
+  if (!key) return null;
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.metaKey) parts.push("Meta");
+  if (parts.length === 0) return null;
+  return [...parts, key].join("+");
+}
+
+function formatHotkey(value: string) {
+  return value.split("+").join(" + ");
 }
 
 function hotkeyKeyLabel(event: React.KeyboardEvent<HTMLInputElement>) {

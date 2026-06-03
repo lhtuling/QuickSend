@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/nicegui/main/.vscode/tauri-conf.schema.json",
   "productName": "QuickSend",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "identifier": "com.quicksend.app",
   "build": {
     "beforeDevCommand": "npm run dev",

@@ -88,7 +88,9 @@ fn build_system_tray(app: &AppHandle, labels: UiLabels) -> tauri::Result<()> {
             "toggle_expansion" => {
                 if let Some(state) = app.try_state::<AppState>() {
                     let current = state.text_expansion_active.load(Ordering::Relaxed);
-                    state.text_expansion_active.store(!current, Ordering::Relaxed);
+                    state
+                        .text_expansion_active
+                        .store(!current, Ordering::Relaxed);
                     log::info!(
                         "Text expansion: {}",
                         if !current { "enabled" } else { "disabled" }
@@ -172,7 +174,10 @@ fn load_ui_labels(language_setting: Option<&str>, data_dir: &std::path::Path) ->
         if let Some(value) = custom.get("tray.tooltip").and_then(|item| item.as_str()) {
             values.tooltip = value.to_string();
         }
-        if let Some(value) = custom.get("tray.settingsTitle").and_then(|item| item.as_str()) {
+        if let Some(value) = custom
+            .get("tray.settingsTitle")
+            .and_then(|item| item.as_str())
+        {
             values.settings_title = value.to_string();
         }
     }
@@ -207,8 +212,13 @@ fn resolve_ui_language(language_setting: Option<&str>) -> String {
     }
 }
 
-fn read_custom_ui_translations(language: &str, data_dir: &std::path::Path) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let path = data_dir.join("languages").join(format!("{}.json", language));
+fn read_custom_ui_translations(
+    language: &str,
+    data_dir: &std::path::Path,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let path = data_dir
+        .join("languages")
+        .join(format!("{}.json", language));
     let text = std::fs::read_to_string(path).ok()?;
     let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
     let object = value.as_object()?;
@@ -263,14 +273,11 @@ fn toggle_popup(app: AppHandle) -> Result<(), String> {
 fn create_popup_window(app: &AppHandle) -> Result<(), String> {
     use tauri::WebviewUrl;
 
-    let mut builder = tauri::WebviewWindowBuilder::new(
-        app,
-        "popup",
-        WebviewUrl::App("index.html#/popup".into()),
-    )
-    .title("QuickSend")
-    .inner_size(420.0, 520.0)
-    .decorations(false);
+    let mut builder =
+        tauri::WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html#/popup".into()))
+            .title("QuickSend")
+            .inner_size(420.0, 520.0)
+            .decorations(false);
 
     #[cfg(not(target_os = "macos"))]
     {
@@ -278,13 +285,13 @@ fn create_popup_window(app: &AppHandle) -> Result<(), String> {
     }
 
     let win = builder
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .resizable(false)
-    .focused(true)
-    .visible(false)
-    .build()
-    .map_err(|e| e.to_string())?;
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .focused(true)
+        .visible(false)
+        .build()
+        .map_err(|e| e.to_string())?;
 
     show_popup_at_cursor(app, &win);
     Ok(())
@@ -348,8 +355,8 @@ pub fn run() {
 
             std::fs::create_dir_all(&db_path).ok();
 
-            let db = Database::new(db_path.join("quicksend.db"))
-                .expect("Failed to initialize database");
+            let db =
+                Database::new(db_path.join("quicksend.db")).expect("Failed to initialize database");
             let language = db.get_setting("language").ok().flatten();
             let labels = load_ui_labels(language.as_deref(), &db_path);
 
@@ -358,7 +365,8 @@ pub fn run() {
                 text_expansion_active: AtomicBool::new(true),
             });
 
-            let start_hidden = std::env::args().any(|arg| arg == "--hidden" || arg == "--minimized");
+            let start_hidden =
+                std::env::args().any(|arg| arg == "--hidden" || arg == "--minimized");
 
             if let Ok(listener) = instance_listener.try_clone() {
                 start_single_instance_server(listener, app_handle.clone());
@@ -403,6 +411,7 @@ pub fn run() {
             commands::set_autostart_enabled,
             commands::get_settings,
             commands::update_setting,
+            commands::set_popup_hotkey,
             commands::get_i18n_context,
             commands::export_data,
             commands::import_data,

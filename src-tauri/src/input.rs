@@ -5,6 +5,9 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+pub(crate) const DEFAULT_POPUP_HOTKEY: &str = "Ctrl+Alt+Q";
+pub(crate) const POPUP_HOTKEY_SETTING: &str = "popup_hotkey";
+
 pub fn start_global_input_listener(app: AppHandle) {
     let _ = std::thread::Builder::new()
         .name("quicksend-input-listener".to_string())
@@ -59,9 +62,7 @@ impl InputTracker {
     fn handle_key_press(&mut self, key: Key, name: Option<String>) {
         self.set_modifier(key, true);
 
-        if self.ctrl && self.alt && matches!(key, Key::KeyQ) && !self.popup_chord_opened {
-            self.popup_chord_opened = true;
-            self.toggle_popup();
+        if !self.popup_chord_opened && self.handle_popup_hotkey(key) {
             return;
         }
 
@@ -88,7 +89,7 @@ impl InputTracker {
     fn handle_key_release(&mut self, key: Key) {
         self.set_modifier(key, false);
 
-        if !self.ctrl || !self.alt {
+        if !is_modifier(key) || (!self.ctrl && !self.alt && !self.shift && !self.meta) {
             self.popup_chord_opened = false;
         }
     }
@@ -112,6 +113,21 @@ impl InputTracker {
         if let Err(err) = crate::toggle_popup(self.app.clone()) {
             log::warn!("Failed to toggle popup: {}", err);
         }
+    }
+
+    fn handle_popup_hotkey(&mut self, key: Key) -> bool {
+        let Some(combo) = build_hotkey_string(self.ctrl, self.alt, self.shift, self.meta, key)
+        else {
+            return false;
+        };
+
+        if normalize_hotkey(&configured_popup_hotkey(&self.app)) != combo {
+            return false;
+        }
+
+        self.popup_chord_opened = true;
+        self.toggle_popup();
+        true
     }
 
     fn record_typed_key(&mut self, key: Key, name: Option<String>) {
@@ -197,7 +213,8 @@ impl InputTracker {
     }
 
     fn handle_phrase_hotkey(&mut self, key: Key) -> bool {
-        let Some(combo) = build_hotkey_string(self.ctrl, self.alt, self.shift, self.meta, key) else {
+        let Some(combo) = build_hotkey_string(self.ctrl, self.alt, self.shift, self.meta, key)
+        else {
             return false;
         };
 
@@ -268,6 +285,22 @@ fn is_current_process_blocked(db: &Database) -> bool {
         .map(|line| line.trim().to_ascii_lowercase())
         .filter(|line| !line.is_empty())
         .any(|line| line == process_name.to_ascii_lowercase())
+}
+
+fn configured_popup_hotkey(app: &AppHandle) -> String {
+    let Some(state) = app.try_state::<AppState>() else {
+        return DEFAULT_POPUP_HOTKEY.to_string();
+    };
+
+    let Ok(db) = state.db.lock() else {
+        return DEFAULT_POPUP_HOTKEY.to_string();
+    };
+
+    db.get_setting(POPUP_HOTKEY_SETTING)
+        .ok()
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_POPUP_HOTKEY.to_string())
 }
 
 fn release_all_modifiers() {
@@ -527,14 +560,17 @@ fn build_hotkey_string(ctrl: bool, alt: bool, shift: bool, meta: bool, key: Key)
     Some(parts.join("+"))
 }
 
-fn normalize_hotkey(input: &str) -> String {
+pub(crate) fn normalize_hotkey(input: &str) -> String {
     let mut ctrl = false;
     let mut alt = false;
     let mut shift = false;
     let mut meta = false;
     let mut key = String::new();
 
-    for part in input.split('+').map(|part| normalize_hotkey_part(part.trim())) {
+    for part in input
+        .split('+')
+        .map(|part| normalize_hotkey_part(part.trim()))
+    {
         match part.as_str() {
             "Ctrl" => ctrl = true,
             "Alt" => alt = true,
@@ -654,37 +690,81 @@ fn key_to_label(key: Key) -> Option<String> {
 fn key_to_typed_char(key: Key, shift: bool) -> Option<char> {
     let ch = match key {
         Key::SemiColon => {
-            if shift { ':' } else { ';' }
+            if shift {
+                ':'
+            } else {
+                ';'
+            }
         }
         Key::Quote => {
-            if shift { '"' } else { '\'' }
+            if shift {
+                '"'
+            } else {
+                '\''
+            }
         }
         Key::Comma => {
-            if shift { '<' } else { ',' }
+            if shift {
+                '<'
+            } else {
+                ','
+            }
         }
         Key::Dot => {
-            if shift { '>' } else { '.' }
+            if shift {
+                '>'
+            } else {
+                '.'
+            }
         }
         Key::Slash => {
-            if shift { '?' } else { '/' }
+            if shift {
+                '?'
+            } else {
+                '/'
+            }
         }
         Key::BackSlash | Key::IntlBackslash => {
-            if shift { '|' } else { '\\' }
+            if shift {
+                '|'
+            } else {
+                '\\'
+            }
         }
         Key::LeftBracket => {
-            if shift { '{' } else { '[' }
+            if shift {
+                '{'
+            } else {
+                '['
+            }
         }
         Key::RightBracket => {
-            if shift { '}' } else { ']' }
+            if shift {
+                '}'
+            } else {
+                ']'
+            }
         }
         Key::BackQuote => {
-            if shift { '~' } else { '`' }
+            if shift {
+                '~'
+            } else {
+                '`'
+            }
         }
         Key::Minus => {
-            if shift { '_' } else { '-' }
+            if shift {
+                '_'
+            } else {
+                '-'
+            }
         }
         Key::Equal => {
-            if shift { '+' } else { '=' }
+            if shift {
+                '+'
+            } else {
+                '='
+            }
         }
         _ => return None,
     };

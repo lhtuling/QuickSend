@@ -6,7 +6,7 @@ It is built with Tauri 2, React, TypeScript, Rust, and SQLite. Data stays on the
 
 ## Features
 
-- Global popup with `Ctrl + Alt + Q`
+- Configurable global popup shortcut, defaulting to `Ctrl + Alt + Q`
 - Phrase groups for organizing repeated content
 - Text and image phrases
 - One-click paste and right-click copy
@@ -27,7 +27,7 @@ It is built with Tauri 2, React, TypeScript, Rust, and SQLite. Data stays on the
 ### Paste a phrase
 
 1. Place the cursor in any input box.
-2. Press `Ctrl + Alt + Q`.
+2. Press the configured popup shortcut. The default is `Ctrl + Alt + Q`.
 3. Search or select a phrase.
 4. Press `Enter` or click it.
 
